@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import oenoLogo from "./assets/oeno-logo.png";
+import oenoLogo from "./oeno-logo.png";
 import { generaRapportinoPDF, apriEmailConDestinatari } from "./pdfGenerator";
 
 // ---------------------------------------------------------------------------
