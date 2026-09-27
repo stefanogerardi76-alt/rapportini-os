@@ -1,9 +1,21 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import oenoLogo from "./assets/oeno-logo.png";
+import { generaRapportinoPDF, apriEmailConDestinatari } from "./pdfGenerator";
 
 // ---------------------------------------------------------------------------
 // RAPPORTINI OS
 // Registro interventi da cantina — un pannello di controllo, non un modulo.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ELENCO OPERATORI — modifica qui nome e PIN di ognuno (4 cifre consigliate).
+// Per aggiungere/rimuovere un operatore, aggiungi/rimuovi una riga.
+// ---------------------------------------------------------------------------
+const OPERATORI = [
+  { nome: "Stefano Gerardi", pin: "2910" },
+  { nome: "Simona Gussago", pin: "1234" },
+  { nome: "Valentina Erović", pin: "1234" },
+];
 
 const LAVORAZIONI = [
   { id: "tiraggio", label: "Tiraggio", cifra: "01" },
@@ -97,6 +109,13 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
     ctx.strokeStyle = "#EDE8DD";
     if (!value) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+    } else {
+      const img = new Image();
+      img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = value;
     }
   }, [value]);
 
@@ -290,23 +309,31 @@ function ControlTable({ rows, onChange }) {
 // ---------------------------------------------------------------------------
 // Home — elenco lavorazioni
 // ---------------------------------------------------------------------------
-function Home({ onSelect, storico }) {
+function Home({ onSelect, storico, operatore, onCambiaOperatore }) {
   return (
     <div style={styles.homeWrap}>
       <header style={styles.homeHeader}>
         <div style={styles.brandRow}>
-          <div style={styles.brandMark}>R·OS</div>
+          <img src={oenoLogo} alt="Oeno Soluzioni" style={styles.brandLogo} />
           <div>
             <h1 style={styles.brandTitle}>RAPPORTINI OS</h1>
             <p style={styles.brandSub}>registro interventi di cantina</p>
           </div>
         </div>
-        <div style={styles.homeMeta}>
-          {new Date().toLocaleDateString("it-IT", {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-          })}
+        <div style={{ textAlign: "right" }}>
+          <div style={styles.homeMeta}>
+            {new Date().toLocaleDateString("it-IT", {
+              weekday: "long",
+              day: "numeric",
+              month: "long",
+            })}
+          </div>
+          <div style={styles.operatoreRow}>
+            <span>{operatore}</span>
+            <button onClick={onCambiaOperatore} style={styles.linkBtn}>
+              cambia operatore
+            </button>
+          </div>
         </div>
       </header>
 
@@ -352,15 +379,170 @@ function Home({ onSelect, storico }) {
 // ---------------------------------------------------------------------------
 // Form — maschera intervento
 // ---------------------------------------------------------------------------
-function InterventoForm({ lavorazioneId, onBack, onSave }) {
+// Sessione operatore — resta collegato finché non cambia utente
+// ---------------------------------------------------------------------------
+const SESSIONE_KEY = "rapportini-os-operatore-loggato";
+
+function loadOperatoreSessione() {
+  try {
+    return localStorage.getItem(SESSIONE_KEY) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function saveOperatoreSessione(nome) {
+  try {
+    localStorage.setItem(SESSIONE_KEY, nome);
+  } catch (e) {
+    /* ignora */
+  }
+}
+
+function clearOperatoreSessione() {
+  try {
+    localStorage.removeItem(SESSIONE_KEY);
+  } catch (e) {
+    /* ignora */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Login — nome operatore + PIN personale
+// ---------------------------------------------------------------------------
+function Login({ onLogin }) {
+  const [nome, setNome] = useState("");
+  const [pin, setPin] = useState("");
+  const [errore, setErrore] = useState("");
+
+  const entra = (e) => {
+    e.preventDefault();
+    const trovato = OPERATORI.find(
+      (o) => o.nome === nome && o.pin === pin.trim()
+    );
+    if (trovato) {
+      setErrore("");
+      onLogin(trovato.nome);
+    } else {
+      setErrore("PIN non corretto per l'operatore selezionato");
+    }
+  };
+
+  return (
+    <div style={styles.loginWrap}>
+      <img src={oenoLogo} alt="Oeno Soluzioni" style={styles.loginLogo} />
+      <h1 style={styles.brandTitle}>RAPPORTINI OS</h1>
+      <p style={styles.brandSub}>accedi per iniziare a compilare</p>
+
+      <form onSubmit={entra} style={styles.loginForm}>
+        <Field label="Operatore">
+          <select
+            style={styles.input}
+            value={nome}
+            onChange={(e) => setNome(e.target.value)}
+          >
+            <option value="">seleziona il tuo nome</option>
+            {OPERATORI.map((o) => (
+              <option key={o.nome} value={o.nome}>
+                {o.nome}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="PIN">
+          <input
+            type="password"
+            inputMode="numeric"
+            style={styles.input}
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            placeholder="••••"
+          />
+        </Field>
+        {errore && <div style={styles.loginError}>{errore}</div>}
+        <button type="submit" style={styles.saveBtn} disabled={!nome || !pin}>
+          Entra
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function draftKey(lavorazioneId) {
+  return `rapportini-os-bozza-${lavorazioneId}`;
+}
+
+function loadDraft(lavorazioneId) {
+  try {
+    const raw = localStorage.getItem(draftKey(lavorazioneId));
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveDraft(lavorazioneId, data) {
+  try {
+    localStorage.setItem(draftKey(lavorazioneId), JSON.stringify(data));
+  } catch (e) {
+    /* memoria piena o non disponibile: ignora, si perde solo l'autosalvataggio */
+  }
+}
+
+function clearDraft(lavorazioneId) {
+  try {
+    localStorage.removeItem(draftKey(lavorazioneId));
+  } catch (e) {
+    /* ignora */
+  }
+}
+
+// ---------------------------------------------------------------------------
+function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const lav = LAVORAZIONI.find((l) => l.id === lavorazioneId);
   const full = HAS_FULL_MASK.has(lavorazioneId);
-  const [form, setForm] = useState(full ? emptyFullForm() : emptyAltriForm());
-  const [firmaOperatore, setFirmaOperatore] = useState("");
-  const [firmaCliente, setFirmaCliente] = useState("");
-  const [nomeOperatore, setNomeOperatore] = useState("");
-  const [nomeCliente, setNomeCliente] = useState("");
+  const bozzaIniziale = loadDraft(lavorazioneId);
+
+  const [form, setForm] = useState(
+    bozzaIniziale?.form || (full ? emptyFullForm() : emptyAltriForm())
+  );
+  const [firmaOperatore, setFirmaOperatore] = useState(
+    bozzaIniziale?.firmaOperatore || ""
+  );
+  const [firmaCliente, setFirmaCliente] = useState(
+    bozzaIniziale?.firmaCliente || ""
+  );
+  const [nomeOperatore, setNomeOperatore] = useState(
+    bozzaIniziale?.nomeOperatore || operatore || ""
+  );
+  const [nomeCliente, setNomeCliente] = useState(
+    bozzaIniziale?.nomeCliente || ""
+  );
+  const [emailAggiuntiva, setEmailAggiuntiva] = useState(
+    bozzaIniziale?.emailAggiuntiva || ""
+  );
   const [saved, setSaved] = useState(false);
+  const [bozzaRipristinata] = useState(!!bozzaIniziale);
+
+  // Salva automaticamente la bozza a ogni modifica (nessuna connessione richiesta)
+  useEffect(() => {
+    saveDraft(lavorazioneId, {
+      form,
+      firmaOperatore,
+      firmaCliente,
+      nomeOperatore,
+      nomeCliente,
+      emailAggiuntiva,
+    });
+  }, [
+    lavorazioneId,
+    form,
+    firmaOperatore,
+    firmaCliente,
+    nomeOperatore,
+    nomeCliente,
+    emailAggiuntiva,
+  ]);
 
   const set = useCallback((patch) => setForm((f) => ({ ...f, ...patch })), []);
 
@@ -399,13 +581,44 @@ function InterventoForm({ lavorazioneId, onBack, onSave }) {
       vino: full
         ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
         : form.vino,
+      emailAggiuntiva,
       ora: new Date().toLocaleTimeString("it-IT", {
         hour: "2-digit",
         minute: "2-digit",
       }),
     });
+
+    // Genera il PDF del rapportino, lo scarica e apre l'email pronta
+    try {
+      const { doc, filename } = generaRapportinoPDF({
+        lavorazioneLabel: lav.label,
+        cliente: form.cliente,
+        data: form.data,
+        prodotti: full ? form.prodotti : null,
+        vinoSemplice: form.vino,
+        noteSemplice: form.note,
+        firmaOperatore,
+        nomeOperatore,
+        firmaCliente,
+        nomeCliente,
+        emailAggiuntiva,
+      });
+      doc.save(filename);
+      setTimeout(() => {
+        apriEmailConDestinatari({
+          filename,
+          cliente: form.cliente,
+          lavorazioneLabel: lav.label,
+          emailAggiuntiva,
+        });
+      }, 600);
+    } catch (e) {
+      console.error("Errore nella generazione del PDF:", e);
+    }
+
+    clearDraft(lavorazioneId);
     setSaved(true);
-    setTimeout(() => onBack(), 900);
+    setTimeout(() => onBack(), 1400);
   };
 
   return (
@@ -418,6 +631,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave }) {
           <span style={styles.formCifra}>{lav.cifra}</span>
           <h2 style={styles.formTitle}>{lav.label}</h2>
         </div>
+        {bozzaRipristinata && (
+          <div style={styles.draftBanner}>
+            bozza ripristinata — riprendi da dove avevi lasciato
+          </div>
+        )}
       </div>
 
       <div style={styles.formBody}>
@@ -679,6 +897,16 @@ function InterventoForm({ lavorazioneId, onBack, onSave }) {
           />
         </div>
 
+        <Field label="Email aggiuntiva (facoltativa)">
+          <input
+            type="email"
+            style={styles.input}
+            value={emailAggiuntiva}
+            onChange={(e) => setEmailAggiuntiva(e.target.value)}
+            placeholder="es. destinatario@azienda.it"
+          />
+        </Field>
+
         <div style={styles.saveRow}>
           {!canSave && (
             <span style={styles.saveHint}>
@@ -720,6 +948,13 @@ function Field({ label, required, children }) {
 export default function App() {
   const [view, setView] = useState("home");
   const [storico, setStorico] = useState([]);
+  const [operatore, setOperatore] = useState(loadOperatoreSessione());
+
+  const cambiaOperatore = () => {
+    clearOperatoreSessione();
+    setOperatore("");
+    setView("home");
+  };
 
   return (
     <div style={styles.app}>
@@ -728,16 +963,26 @@ export default function App() {
         input::placeholder, textarea::placeholder { color: rgba(237,232,221,0.32); }
         input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.8); }
       `}</style>
-      {view === "home" ? (
+      {!operatore ? (
+        <Login
+          onLogin={(nome) => {
+            saveOperatoreSessione(nome);
+            setOperatore(nome);
+          }}
+        />
+      ) : view === "home" ? (
         <Home
           storico={storico}
           onSelect={(id) => setView(id)}
+          operatore={operatore}
+          onCambiaOperatore={cambiaOperatore}
         />
       ) : (
         <InterventoForm
           lavorazioneId={view}
           onBack={() => setView("home")}
           onSave={(entry) => setStorico((s) => [entry, ...s])}
+          operatore={operatore}
         />
       )}
     </div>
@@ -773,6 +1018,42 @@ const styles = {
     padding: "20px 16px 48px",
   },
 
+  // ---- Login ----
+  loginWrap: {
+    maxWidth: 340,
+    margin: "18vh auto 0",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    textAlign: "center",
+    gap: 4,
+  },
+  loginLogo: { height: 56, width: "auto", marginBottom: 14 },
+  loginForm: {
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    gap: 14,
+    marginTop: 24,
+    textAlign: "left",
+  },
+  loginError: {
+    fontSize: 12.5,
+    color: "#D98F7A",
+    background: "rgba(181,72,47,0.10)",
+    border: "1px solid rgba(181,72,47,0.35)",
+    borderRadius: 7,
+    padding: "8px 11px",
+  },
+  operatoreRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+    fontSize: 12,
+    color: COLORS.textMuted,
+  },
+
   // ---- Home ----
   homeWrap: { maxWidth: 640, margin: "0 auto" },
   homeHeader: {
@@ -784,14 +1065,10 @@ const styles = {
     marginBottom: 22,
   },
   brandRow: { display: "flex", alignItems: "center", gap: 12 },
-  brandMark: {
-    fontFamily: FONT_MONO,
-    fontSize: 12,
-    letterSpacing: 1.5,
-    color: COLORS.gold,
-    border: `1px solid ${COLORS.gold}`,
-    borderRadius: 5,
-    padding: "5px 7px",
+  brandLogo: {
+    height: 44,
+    width: "auto",
+    display: "block",
   },
   brandTitle: {
     fontFamily: FONT_DISPLAY,
@@ -864,6 +1141,16 @@ const styles = {
   // ---- Form ----
   formWrap: { maxWidth: 640, margin: "0 auto" },
   formHeader: { marginBottom: 20 },
+  draftBanner: {
+    marginTop: 10,
+    padding: "7px 11px",
+    borderRadius: 6,
+    background: "rgba(201,162,39,0.12)",
+    border: "1px solid rgba(201,162,39,0.35)",
+    color: "#C9A227",
+    fontSize: 12.5,
+    fontStyle: "italic",
+  },
   backBtn: {
     background: "none",
     border: "none",
