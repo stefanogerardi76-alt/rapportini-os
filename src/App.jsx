@@ -15,8 +15,8 @@ const OPERATORI = [
   { nome: "Stefano Gerardi", pin: "2910" },
   { nome: "Simona Gussago", pin: "1234" },
   { nome: "Valentina Erović", pin: "1234" },
+  { nome: "Marco Santillo", pin: "1310" },
 ];
-
 const LAVORAZIONI = [
   { id: "tiraggio", label: "Tiraggio", cifra: "01" },
   { id: "sboccatura", label: "Sboccatura", cifra: "02" },
