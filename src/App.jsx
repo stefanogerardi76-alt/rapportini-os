@@ -16,6 +16,7 @@ const OPERATORI = [
   { nome: "Simona Gussago", pin: "1234" },
   { nome: "Valentina Erović", pin: "1234" },
   { nome: "Marco Santillo", pin: "1310" },
+  { nome: "Giacomo Savardi", pin: "1205" },
 ];
 
 const CLIENTI = [
@@ -658,6 +659,13 @@ function emptyControlRows() {
     posizionamentoGabbietta: false,
     bidule: false,
     chiusura: false,
+    // colonne usate solo nel foglio Confezionamento
+    capsula: false,
+    fronte: false,
+    retro: false,
+    collare: false,
+    fascetta: false,
+    lotto: false,
   }));
 }
 
@@ -677,7 +685,9 @@ function emptyProdotto() {
     sedimento: "",
     bottFormato: "",
     bottLotto: "",
-    bottiglieFatte: "",
+    bottiglieFatte: "", // colonna "Bottiglia"
+    qtaMagnum: "",
+    qtaAltro: "",
     note: "",
     controlli: emptyControlRows(),
   };
@@ -799,13 +809,17 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
 // ---------------------------------------------------------------------------
 // Tabella controlli — rotolo di rilevazioni ogni 15'
 // ---------------------------------------------------------------------------
-function ControlTable({ rows, onChange }) {
+function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
   const update = (idx, patch) => {
     const next = rows.slice();
     next[idx] = { ...next[idx], ...patch };
     onChange(next);
   };
-  const filledCount = rows.filter((r) => r.livello !== "").length;
+  const filledCount = confezionamento
+    ? rows.filter(
+        (r) => r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
+      ).length
+    : rows.filter((r) => r.livello !== "").length;
 
   return (
     <div style={styles.controlBlock}>
@@ -821,89 +835,131 @@ function ControlTable({ rows, onChange }) {
         </div>
       </div>
 
-      <div style={styles.controlTableWrap}>
-        <div style={styles.controlTableHead}>
-          <span style={{ width: 64 }}>ora</span>
-          <span style={{ flex: 1 }}>livello (mm)</span>
-          <span style={{ flex: 1 }}>dosaggio (ml)</span>
-          <span style={{ flex: 1 }}>inser. tappo (mm)</span>
-          <span style={{ width: 76, textAlign: "center" }}>bidule</span>
-          <span style={{ width: 76, textAlign: "center" }}>tappo</span>
-          <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
-          <span style={{ width: 76, textAlign: "center" }}>gabbietta</span>
-        </div>
-        {rows.map((r, i) => (
-          <div
-            key={r.ora}
-            style={{
-              ...styles.controlRow,
-              background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
-            }}
-          >
-            <span style={styles.controlTime}>{r.ora}</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="—"
-              value={r.livello}
-              onChange={(e) => update(i, { livello: e.target.value })}
-              style={styles.controlInput}
-            />
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="—"
-              value={r.dosaggio}
-              onChange={(e) => update(i, { dosaggio: e.target.value })}
-              style={styles.controlInput}
-            />
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="—"
-              value={r.inserimentoTappo}
-              onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
-              style={styles.controlInput}
-            />
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.bidule}
-                onChange={(e) => update(i, { bidule: e.target.checked })}
-                style={styles.checkbox}
-              />
-            </label>
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.chiusura}
-                onChange={(e) => update(i, { chiusura: e.target.checked })}
-                style={styles.checkbox}
-              />
-            </label>
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.integritaTappo}
-                onChange={(e) =>
-                  update(i, { integritaTappo: e.target.checked })
-                }
-                style={styles.checkbox}
-              />
-            </label>
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.posizionamentoGabbietta}
-                onChange={(e) =>
-                  update(i, { posizionamentoGabbietta: e.target.checked })
-                }
-                style={styles.checkbox}
-              />
-            </label>
+      {confezionamento ? (
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ flex: 1, textAlign: "center" }}>capsula</span>
+            <span style={{ flex: 1, textAlign: "center" }}>fronte</span>
+            <span style={{ flex: 1, textAlign: "center" }}>retro</span>
+            <span style={{ flex: 1, textAlign: "center" }}>collare</span>
+            <span style={{ flex: 1, textAlign: "center" }}>fascetta</span>
+            <span style={{ flex: 1, textAlign: "center" }}>lotto</span>
           </div>
-        ))}
-      </div>
+          {rows.map((r, i) => (
+            <div
+              key={r.ora}
+              style={{
+                ...styles.controlRow,
+                background:
+                  r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
+                    ? "rgba(201,162,39,0.06)"
+                    : "transparent",
+              }}
+            >
+              <span style={styles.controlTime}>{r.ora}</span>
+              {["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map(
+                (campo) => (
+                  <label key={campo} style={{ ...styles.checkCell, flex: 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={r[campo]}
+                      onChange={(e) => update(i, { [campo]: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                )
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ flex: 1 }}>livello (mm)</span>
+            <span style={{ flex: 1 }}>dosaggio (ml)</span>
+            <span style={{ flex: 1 }}>inser. tappo (mm)</span>
+            <span style={{ width: 76, textAlign: "center" }}>bidule</span>
+            <span style={{ width: 76, textAlign: "center" }}>tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>
+              {tiraggio ? "posiz. bidule" : "gabbietta"}
+            </span>
+          </div>
+          {rows.map((r, i) => (
+            <div
+              key={r.ora}
+              style={{
+                ...styles.controlRow,
+                background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
+              }}
+            >
+              <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.livello}
+                onChange={(e) => update(i, { livello: e.target.value })}
+                style={styles.controlInput}
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.dosaggio}
+                onChange={(e) => update(i, { dosaggio: e.target.value })}
+                style={styles.controlInput}
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.inserimentoTappo}
+                onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
+                style={styles.controlInput}
+              />
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.bidule}
+                  onChange={(e) => update(i, { bidule: e.target.checked })}
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.chiusura}
+                  onChange={(e) => update(i, { chiusura: e.target.checked })}
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.integritaTappo}
+                  onChange={(e) =>
+                    update(i, { integritaTappo: e.target.checked })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.posizionamentoGabbietta}
+                  onChange={(e) =>
+                    update(i, { posizionamentoGabbietta: e.target.checked })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1353,7 +1409,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   </Field>
                 </div>
 
-                <div style={styles.sectionLabel}>Gabbietta</div>
+                {lavorazioneId !== "confezionamento" && (
+                  <>
+                <div style={styles.sectionLabel}>
+                  {lavorazioneId === "tiraggio" ? "Bidule" : "Gabbietta"}
+                </div>
                 <div style={styles.fieldGrid3}>
                   <Field label="Tipo">
                     <input
@@ -1383,7 +1443,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     />
                   </Field>
                 </div>
+                  </>
+                )}
 
+                {lavorazioneId !== "tiraggio" && lavorazioneId !== "confezionamento" && (
+                  <>
                 <div style={styles.sectionLabel}>Liqueur</div>
                 <div style={styles.fieldGrid2}>
                   <Field label="Dosaggio">
@@ -1437,6 +1501,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     </label>
                   ))}
                 </div>
+                  </>
+                )}
 
                 <div style={styles.sectionLabel}>Bottiglie</div>
                 <div style={styles.fieldGrid2}>
@@ -1472,6 +1538,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                 <ControlTable
                   rows={p.controlli}
                   onChange={(controlli) => setProdotto(idx, { controlli })}
+                  tiraggio={lavorazioneId === "tiraggio"}
+                  confezionamento={lavorazioneId === "confezionamento"}
                 />
               </div>
             ))}
@@ -1491,14 +1559,16 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
               <div style={styles.qtaTable}>
                 <div style={styles.qtaHead}>
                   <span style={{ flex: 1 }}>vino</span>
-                  <span style={{ width: 110, textAlign: "right" }}>bottiglie</span>
+                  <span style={styles.qtaColHead}>Bottiglia</span>
+                  <span style={styles.qtaColHead}>Magnum</span>
+                  <span style={styles.qtaColHead}>Altro</span>
                 </div>
                 {form.prodotti.map((p, idx) => (
                   <div key={idx} style={styles.qtaRow}>
-                    <span style={styles.qtaLabel}>
-                      Vino {idx + 1}
-                      {p.vino ? ` — ${p.vino}` : ""}
-                    </span>
+                    <div style={styles.qtaLabelWrap}>
+                      <span style={styles.qtaLabel}>Vino {idx + 1}</span>
+                      {p.vino ? <span style={styles.qtaSub}>{p.vino}</span> : null}
+                    </div>
                     <input
                       type="number"
                       inputMode="numeric"
@@ -1507,6 +1577,26 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                       value={p.bottiglieFatte || ""}
                       onChange={(e) =>
                         setProdotto(idx, { bottiglieFatte: e.target.value })
+                      }
+                      style={styles.qtaInput}
+                    />
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      placeholder="0"
+                      value={p.qtaMagnum || ""}
+                      onChange={(e) =>
+                        setProdotto(idx, { qtaMagnum: e.target.value })
+                      }
+                      style={styles.qtaInput}
+                    />
+                    <input
+                      type="text"
+                      placeholder="0"
+                      value={p.qtaAltro || ""}
+                      onChange={(e) =>
+                        setProdotto(idx, { qtaAltro: e.target.value })
                       }
                       style={styles.qtaInput}
                     />
@@ -1541,6 +1631,28 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
             nome={nomeCliente}
             onNomeChange={setNomeCliente}
           />
+        </div>
+
+        <div style={styles.homeRow}>
+          <button type="button" onClick={onBack} style={styles.homeBtn}>
+            ← Torna alla home
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Tornare alla home e cancellare questo rapportino compilato finora?"
+                )
+              ) {
+                clearDraft(lavorazioneId);
+                onBack();
+              }
+            }}
+            style={styles.homeBtnDanger}
+          >
+            Torna alla home e cancella
+          </button>
         </div>
 
         <Field label="Email aggiuntiva (facoltativa)">
@@ -2028,9 +2140,18 @@ const styles = {
     alignItems: "center",
     borderBottom: "1px solid rgba(237,232,221,0.06)",
   },
-  qtaLabel: { flex: 1, fontSize: 13.5, fontFamily: FONT_DISPLAY },
+  qtaLabelWrap: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
+  qtaLabel: { fontSize: 13.5, fontFamily: FONT_DISPLAY },
+  qtaSub: {
+    fontSize: 11,
+    color: COLORS.textMuted,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  qtaColHead: { width: 62, textAlign: "right" },
   qtaInput: {
-    width: 110,
+    width: 62,
     background: "transparent",
     border: "none",
     borderBottom: `1px solid ${COLORS.borderStrong}`,
@@ -2063,6 +2184,34 @@ const styles = {
     fontSize: 11,
     cursor: "pointer",
     padding: 0,
+  },
+
+  homeRow: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  homeBtn: {
+    flex: "1 1 auto",
+    background: COLORS.surface,
+    border: `1px solid ${COLORS.borderStrong}`,
+    borderRadius: 8,
+    padding: "12px 16px",
+    color: COLORS.text,
+    fontSize: 13.5,
+    fontFamily: FONT_BODY,
+    cursor: "pointer",
+  },
+  homeBtnDanger: {
+    flex: "1 1 auto",
+    background: "rgba(181,72,47,0.10)",
+    border: `1px solid rgba(181,72,47,0.45)`,
+    borderRadius: 8,
+    padding: "12px 16px",
+    color: "#D98F7A",
+    fontSize: 13.5,
+    fontFamily: FONT_BODY,
+    cursor: "pointer",
   },
 
   saveRow: {
