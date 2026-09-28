@@ -163,6 +163,22 @@ export function generaRapportinoPDF({
     y = riga(doc, y, "Note", noteSemplice);
   }
 
+  // Quantità bottiglie fatte
+  if (prodotti && prodotti.length) {
+    y = checkNuovaPagina(doc, y + 4, 240);
+    y = titolo(doc, y + 2, "Quantità bottiglie fatte");
+    doc.setFontSize(9.5);
+    prodotti.forEach((p, idx) => {
+      y = checkNuovaPagina(doc, y);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Vino ${idx + 1}${p.vino ? " — " + p.vino : ""}`, 14, y);
+      doc.setFont("helvetica", "bold");
+      doc.text(String(p.bottiglieFatte || "—"), 196, y, { align: "right" });
+      y += 6;
+    });
+    y += 2;
+  }
+
   // Firme
   y = checkNuovaPagina(doc, y + 6, 230);
   y = titolo(doc, y, "Firme");
