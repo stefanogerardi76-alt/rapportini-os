@@ -77,14 +77,17 @@ export function generaRapportinoPDF({
         "Tappo",
         [p.tappoTipo, p.tappoMarca, p.tappoLotto].filter(Boolean).join(" — ")
       );
-      y = riga(
-        doc,
-        y,
-        "Gabbietta",
-        [p.gabbiettaTipo, p.gabbiettaMarca, p.gabbiettaLotto]
-          .filter(Boolean)
-          .join(" — ")
-      );
+      if (lavorazioneLabel !== "Confezionamento") {
+        y = riga(
+          doc,
+          y,
+          lavorazioneLabel === "Tiraggio" ? "Bidule" : "Gabbietta",
+          [p.gabbiettaTipo, p.gabbiettaMarca, p.gabbiettaLotto]
+            .filter(Boolean)
+            .join(" — ")
+        );
+      }
+      if (lavorazioneLabel !== "Tiraggio" && lavorazioneLabel !== "Confezionamento") {
       y = riga(
         doc,
         y,
@@ -97,6 +100,7 @@ export function generaRapportinoPDF({
           .join(" — ")
       );
       y = riga(doc, y, "Sedimento", p.sedimento);
+      }
       y = riga(
         doc,
         y,
@@ -105,15 +109,18 @@ export function generaRapportinoPDF({
       );
       y = riga(doc, y, "Note", p.note);
 
-      const righeCompilate = (p.controlli || []).filter(
-        (r) =>
-          r.livello ||
-          r.dosaggio ||
-          r.inserimentoTappo ||
-          r.integritaTappo ||
-          r.posizionamentoGabbietta ||
-          r.bidule ||
-          r.chiusura
+      const isConfezionamento = lavorazioneLabel === "Confezionamento";
+
+      const righeCompilate = (p.controlli || []).filter((r) =>
+        isConfezionamento
+          ? r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
+          : r.livello ||
+            r.dosaggio ||
+            r.inserimentoTappo ||
+            r.integritaTappo ||
+            r.posizionamentoGabbietta ||
+            r.bidule ||
+            r.chiusura
       );
 
       if (righeCompilate.length) {
@@ -123,17 +130,21 @@ export function generaRapportinoPDF({
         doc.text("Tabella controlli (righe compilate)", 14, y);
         y += 5;
 
-        const headers = [
-          "Ora",
-          "Liv.",
-          "Dos.",
-          "Ins.tappo",
-          "Integr.",
-          "Gabb.",
-          "Bidule",
-          "Chius.",
-        ];
-        const colX = [14, 32, 46, 60, 82, 100, 118, 138];
+        const headers = isConfezionamento
+          ? ["Ora", "Caps.", "Fronte", "Retro", "Collare", "Fasc.", "Lotto"]
+          : [
+              "Ora",
+              "Liv.",
+              "Dos.",
+              "Ins.tappo",
+              "Integr.",
+              lavorazioneLabel === "Tiraggio" ? "Pos.bid." : "Gabb.",
+              "Bidule",
+              "Chius.",
+            ];
+        const colX = isConfezionamento
+          ? [14, 32, 56, 82, 108, 138, 164]
+          : [14, 32, 46, 60, 82, 100, 118, 138];
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
         headers.forEach((h, i) => doc.text(h, colX[i], y));
@@ -142,16 +153,26 @@ export function generaRapportinoPDF({
 
         righeCompilate.forEach((r) => {
           y = checkNuovaPagina(doc, y);
-          const vals = [
-            r.ora,
-            r.livello || "",
-            r.dosaggio || "",
-            r.inserimentoTappo || "",
-            r.integritaTappo ? "✓" : "",
-            r.posizionamentoGabbietta ? "✓" : "",
-            r.bidule ? "✓" : "",
-            r.chiusura ? "✓" : "",
-          ];
+          const vals = isConfezionamento
+            ? [
+                r.ora,
+                r.capsula ? "✓" : "",
+                r.fronte ? "✓" : "",
+                r.retro ? "✓" : "",
+                r.collare ? "✓" : "",
+                r.fascetta ? "✓" : "",
+                r.lotto ? "✓" : "",
+              ]
+            : [
+                r.ora,
+                r.livello || "",
+                r.dosaggio || "",
+                r.inserimentoTappo || "",
+                r.integritaTappo ? "✓" : "",
+                r.posizionamentoGabbietta ? "✓" : "",
+                r.bidule ? "✓" : "",
+                r.chiusura ? "✓" : "",
+              ];
           vals.forEach((v, i) => doc.text(String(v), colX[i], y));
           y += 4.5;
         });
@@ -163,17 +184,28 @@ export function generaRapportinoPDF({
     y = riga(doc, y, "Note", noteSemplice);
   }
 
-  // Quantità bottiglie fatte
+  // Quantità bottiglie fatte (colonne: Bottiglia, Magnum, Altro)
   if (prodotti && prodotti.length) {
     y = checkNuovaPagina(doc, y + 4, 240);
     y = titolo(doc, y + 2, "Quantità bottiglie fatte");
+    const colX = [140, 166, 194]; // allineamento a destra
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text("Vino", 14, y);
+    doc.text("Bottiglia", colX[0], y, { align: "right" });
+    doc.text("Magnum", colX[1], y, { align: "right" });
+    doc.text("Altro", colX[2], y, { align: "right" });
+    y += 5;
     doc.setFontSize(9.5);
     prodotti.forEach((p, idx) => {
       y = checkNuovaPagina(doc, y);
       doc.setFont("helvetica", "normal");
-      doc.text(`Vino ${idx + 1}${p.vino ? " — " + p.vino : ""}`, 14, y);
+      const etichetta = `Vino ${idx + 1}${p.vino ? " — " + p.vino : ""}`;
+      doc.text(doc.splitTextToSize(etichetta, 95)[0], 14, y);
       doc.setFont("helvetica", "bold");
-      doc.text(String(p.bottiglieFatte || "—"), 196, y, { align: "right" });
+      doc.text(String(p.bottiglieFatte || "—"), colX[0], y, { align: "right" });
+      doc.text(String(p.qtaMagnum || "—"), colX[1], y, { align: "right" });
+      doc.text(String(p.qtaAltro || "—"), colX[2], y, { align: "right" });
       y += 6;
     });
     y += 2;
