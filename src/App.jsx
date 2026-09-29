@@ -1,6 +1,10 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import oenoLogo from "./oeno-logo.png";
 import { generaRapportinoPDF, apriEmailConDestinatari } from "./pdfGenerator";
+import { supabase } from "./supabaseClient";
+
+// Amministratori — vedono il pulsante "Archivio rapportini" in home
+const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović"];
 
 // ---------------------------------------------------------------------------
 // RAPPORTINI OS
@@ -969,7 +973,132 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
 // ---------------------------------------------------------------------------
 // Home — elenco lavorazioni
 // ---------------------------------------------------------------------------
-function Home({ onSelect, storico, operatore, onCambiaOperatore }) {
+// ---------------------------------------------------------------------------
+// Archivio rapportini — solo amministratori, legge dal database condiviso
+// ---------------------------------------------------------------------------
+function ArchivioRapportini({ onBack }) {
+  const [righe, setRighe] = useState([]);
+  const [stato, setStato] = useState("carico"); // carico | ok | errore
+  const [filtro, setFiltro] = useState("");
+
+  useEffect(() => {
+    let annullato = false;
+    supabase
+      .from("rapportini")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (annullato) return;
+        if (error) {
+          console.error("Errore lettura archivio:", error.message);
+          setStato("errore");
+        } else {
+          setRighe(data || []);
+          setStato("ok");
+        }
+      });
+    return () => {
+      annullato = true;
+    };
+  }, []);
+
+  const scarica = (riga) => {
+    if (!riga.pdf_base64) return;
+    const link = document.createElement("a");
+    link.href = `data:application/pdf;base64,${riga.pdf_base64}`;
+    const dataFile = riga.created_at
+      ? new Date(riga.created_at).toISOString().slice(0, 10)
+      : "rapportino";
+    link.download = `${(riga.cliente || "cliente")
+      .toLowerCase()
+      .replace(/\s+/g, "-")}_${(riga.lavorazione || "rapportino")
+      .toLowerCase()
+      .replace(/\s+/g, "-")}_${dataFile}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const righeFiltrate = righe.filter((r) => {
+    if (!filtro.trim()) return true;
+    const t = filtro.toLowerCase();
+    return (
+      (r.cliente || "").toLowerCase().includes(t) ||
+      (r.vino || "").toLowerCase().includes(t) ||
+      (r.operatore || "").toLowerCase().includes(t) ||
+      (r.lavorazione || "").toLowerCase().includes(t)
+    );
+  });
+
+  return (
+    <div style={styles.formWrap}>
+      <div style={styles.formHeader}>
+        <button onClick={onBack} style={styles.backBtn}>
+          ← home
+        </button>
+        <div style={styles.formTitleRow}>
+          <h2 style={styles.formTitle}>Archivio rapportini</h2>
+        </div>
+      </div>
+
+      <input
+        type="text"
+        placeholder="Cerca per cliente, vino, operatore, lavorazione..."
+        value={filtro}
+        onChange={(e) => setFiltro(e.target.value)}
+        style={{ ...styles.input, marginBottom: 16 }}
+      />
+
+      {stato === "carico" && (
+        <p style={{ color: COLORS.textMuted }}>Carico l'archivio…</p>
+      )}
+      {stato === "errore" && (
+        <p style={{ color: "#D98F7A" }}>
+          Non riesco a leggere l'archivio (controlla la connessione). Riprova
+          tornando indietro e riaprendo.
+        </p>
+      )}
+      {stato === "ok" && righeFiltrate.length === 0 && (
+        <p style={{ color: COLORS.textMuted }}>Nessun rapportino trovato.</p>
+      )}
+
+      <div style={styles.archivioList}>
+        {righeFiltrate.map((r) => (
+          <div key={r.id} style={styles.archivioRow}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={styles.archivioLav}>{r.lavorazione}</div>
+              <div style={styles.archivioCliente}>{r.cliente || "—"}</div>
+              <div style={styles.archivioMeta}>
+                {r.vino ? `${r.vino} · ` : ""}
+                {r.operatore || "—"}
+                {r.created_at
+                  ? " · " +
+                    new Date(r.created_at).toLocaleString("it-IT", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : ""}
+              </div>
+            </div>
+            <button
+              onClick={() => scarica(r)}
+              style={styles.homeBtn}
+              disabled={!r.pdf_base64}
+            >
+              Scarica PDF
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
+  const isAdmin = AMMINISTRATORI.includes(operatore);
   return (
     <div style={styles.homeWrap}>
       <header style={styles.homeHeader}>
@@ -996,6 +1125,12 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore }) {
           </div>
         </div>
       </header>
+
+      {isAdmin && (
+        <button onClick={onArchivio} style={styles.archivioBtn}>
+          📁 Archivio rapportini
+        </button>
+      )}
 
       <div style={styles.tileGrid}>
         {LAVORAZIONI.map((l) => (
@@ -1272,6 +1407,33 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           emailAggiuntiva,
         });
       }, 600);
+
+      // Manda una copia al database condiviso (archivio), se c'è connessione.
+      // Se fallisce (es. senza rete), il PDF resta comunque scaricato sul
+      // telefono: non blocchiamo il salvataggio per questo.
+      try {
+        const pdfBase64 = doc.output("datauristring").split(",")[1];
+        const vinoRiepilogo = full
+          ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
+          : form.vino;
+        supabase
+          .from("rapportini")
+          .insert({
+            lavorazione: lav.label,
+            cliente: form.cliente,
+            vino: vinoRiepilogo,
+            operatore: nomeOperatore,
+            dettagli: `Data intervento: ${form.data || "—"}`,
+            pdf_base64: pdfBase64,
+          })
+          .then(({ error }) => {
+            if (error) {
+              console.error("Errore salvataggio archivio:", error.message);
+            }
+          });
+      } catch (e) {
+        console.error("Errore preparazione dati per l'archivio:", e);
+      }
     } catch (e) {
       console.error("Errore nella generazione del PDF:", e);
     }
@@ -1787,7 +1949,10 @@ export default function App() {
           onSelect={(id) => setView(id)}
           operatore={operatore}
           onCambiaOperatore={cambiaOperatore}
+          onArchivio={() => setView("archivio")}
         />
+      ) : view === "archivio" ? (
+        <ArchivioRapportini onBack={() => setView("home")} />
       ) : (
         <InterventoForm
           lavorazioneId={view}
@@ -1898,6 +2063,43 @@ const styles = {
     color: COLORS.textMuted,
     textTransform: "capitalize",
   },
+  archivioBtn: {
+    display: "block",
+    width: "100%",
+    background: "rgba(201,162,39,0.10)",
+    border: `1px solid rgba(201,162,39,0.4)`,
+    borderRadius: 9,
+    padding: "11px 14px",
+    color: COLORS.gold,
+    fontSize: 13.5,
+    fontFamily: FONT_BODY,
+    cursor: "pointer",
+    marginBottom: 14,
+    textAlign: "left",
+  },
+  archivioList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  archivioRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 9,
+    padding: "12px 14px",
+    background: COLORS.surface,
+  },
+  archivioLav: {
+    fontSize: 11,
+    color: COLORS.gold,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  archivioCliente: { fontFamily: FONT_DISPLAY, fontSize: 15.5 },
+  archivioMeta: { fontSize: 11.5, color: COLORS.textMuted, marginTop: 2 },
+
   tileGrid: { display: "flex", flexDirection: "column", gap: 8 },
   tile: {
     display: "flex",
