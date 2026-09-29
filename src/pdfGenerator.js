@@ -74,7 +74,7 @@ export function generaRapportinoPDF({
       y = riga(
         doc,
         y,
-        "Tappo",
+        lavorazioneLabel === "Confezionamento" ? "Capsula" : "Tappo",
         [p.tappoTipo, p.tappoMarca, p.tappoLotto].filter(Boolean).join(" — ")
       );
       if (lavorazioneLabel !== "Confezionamento") {
@@ -107,6 +107,16 @@ export function generaRapportinoPDF({
         "Bottiglie",
         [p.bottFormato, p.bottLotto].filter(Boolean).join(" — ")
       );
+      if (lavorazioneLabel === "Confezionamento") {
+        y = riga(
+          doc,
+          y,
+          "Incartonamento",
+          [p.incartonamento ? "Sì" : "No", p.incartonamentoTipo]
+            .filter(Boolean)
+            .join(" — ")
+        );
+      }
       y = riga(doc, y, "Note", p.note);
 
       const isConfezionamento = lavorazioneLabel === "Confezionamento";

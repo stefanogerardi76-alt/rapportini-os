@@ -688,6 +688,8 @@ function emptyProdotto() {
     bottiglieFatte: "", // colonna "Bottiglia"
     qtaMagnum: "",
     qtaAltro: "",
+    incartonamento: false, // solo Confezionamento
+    incartonamentoTipo: "", // solo Confezionamento
     note: "",
     controlli: emptyControlRows(),
   };
@@ -1378,7 +1380,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
-                <div style={styles.sectionLabel}>Tappo</div>
+                <div style={styles.sectionLabel}>
+                  {lavorazioneId === "confezionamento" ? "Capsula" : "Tappo"}
+                </div>
                 <div style={styles.fieldGrid3}>
                   <Field label="Tipo">
                     <input
@@ -1526,6 +1530,55 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     />
                   </Field>
                 </div>
+
+                {lavorazioneId === "confezionamento" && (
+                  <>
+                    <label style={styles.bioRow}>
+                      <input
+                        type="checkbox"
+                        checked={p.incartonamento}
+                        onChange={(e) =>
+                          setProdotto(idx, { incartonamento: e.target.checked })
+                        }
+                        style={styles.checkbox}
+                      />
+                      <span style={styles.bioText}>INCARTONAMENTO</span>
+                    </label>
+                    <div style={styles.sedimentoRow}>
+                      {[
+                        { value: "nastratrice", label: "Nastratrice" },
+                        { value: "automatico", label: "Automatico" },
+                        { value: "astuccio", label: "Astuccio" },
+                      ].map((opt) => (
+                        <label
+                          key={opt.value}
+                          style={{
+                            ...styles.sedimentoOption,
+                            borderColor:
+                              p.incartonamentoTipo === opt.value
+                                ? COLORS.gold
+                                : COLORS.border,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={p.incartonamentoTipo === opt.value}
+                            onChange={() =>
+                              setProdotto(idx, {
+                                incartonamentoTipo:
+                                  p.incartonamentoTipo === opt.value
+                                    ? ""
+                                    : opt.value,
+                              })
+                            }
+                            style={styles.checkbox}
+                          />
+                          <span>{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
 
                 <Field label="Note">
                   <textarea
