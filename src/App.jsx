@@ -1411,6 +1411,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       // Manda una copia al database condiviso (archivio), se c'è connessione.
       // Se fallisce (es. senza rete), il PDF resta comunque scaricato sul
       // telefono: non blocchiamo il salvataggio per questo.
+      // NOTA DIAGNOSTICA TEMPORANEA: mostriamo un avviso a schermo con
+      // l'esito, per capire da telefono perché l'archivio non si popola.
+      // Da togliere una volta risolto.
       try {
         const pdfBase64 = doc.output("datauristring").split(",")[1];
         const vinoRiepilogo = full
@@ -1429,10 +1432,16 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           .then(({ error }) => {
             if (error) {
               console.error("Errore salvataggio archivio:", error.message);
+              window.alert(
+                "ARCHIVIO — errore nel salvataggio:\n" + error.message
+              );
+            } else {
+              window.alert("ARCHIVIO — salvato correttamente ✓");
             }
           });
       } catch (e) {
         console.error("Errore preparazione dati per l'archivio:", e);
+        window.alert("ARCHIVIO — errore prima dell'invio:\n" + e.message);
       }
     } catch (e) {
       console.error("Errore nella generazione del PDF:", e);
@@ -1870,7 +1879,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </button>
         </div>
 
-        <Field label="Email aggiuntiva (facoltativa)">
+        <Field label="Email cliente (per l'invio del rapportino)">
           <input
             type="email"
             style={styles.input}
