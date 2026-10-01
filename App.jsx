@@ -1,6 +1,29 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import oenoLogo from "./oeno-logo.png";
 import { generaRapportinoPDF, apriEmailConDestinatari } from "./pdfGenerator";
+import { supabase } from "./supabaseClient";
+
+// Amministratori — vedono il pulsante "Archivio rapportini" in home
+const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović"];
+
+// Su iPhone, quando l'app è installata sulla schermata Home, Safari a volte
+// blocca in modo casuale le richieste di rete verso siti esterni (errore
+// "Load failed") — è un bug noto di iOS, non del nostro codice. Riprovare
+// dopo una breve pausa di solito risolve.
+async function conRiprovaDiRete(azione, tentativi = 3, attesaMs = 900) {
+  let ultimoErrore;
+  for (let i = 0; i < tentativi; i++) {
+    try {
+      return await azione();
+    } catch (e) {
+      ultimoErrore = e;
+      if (i < tentativi - 1) {
+        await new Promise((r) => setTimeout(r, attesaMs));
+      }
+    }
+  }
+  throw ultimoErrore;
+}
 
 // ---------------------------------------------------------------------------
 // RAPPORTINI OS
@@ -16,6 +39,7 @@ const OPERATORI = [
   { nome: "Simona Gussago", pin: "1234" },
   { nome: "Valentina Erović", pin: "1234" },
   { nome: "Marco Santillo", pin: "1310" },
+  { nome: "Giacomo Savardi", pin: "1205" },
 ];
 
 const CLIENTI = [
@@ -54,9 +78,9 @@ const CLIENTI = [
   { nome: "AZ AGRICOLA MALVIRà DEI F.LLI DAMONTE", email: "" },
   { nome: "AZ AGRICOLA SPAGNOLLI FRANCESCO", email: "" },
   { nome: "AZ VITIV CONTRADA MICHELE", email: "" },
-  { nome: "Az. Agr. "DELAI"", email: "" },
-  { nome: "AZ. AGR. "MARUGIAT"", email: "" },
-  { nome: "Az. Agr. "PILANDRO"", email: "info@pilandro.com" },
+  { nome: "Az. Agr. \"DELAI\"", email: "" },
+  { nome: "AZ. AGR. \"MARUGIAT\"", email: "" },
+  { nome: "Az. Agr. \"PILANDRO\"", email: "info@pilandro.com" },
   { nome: "Az. Agr. Angelinetta Emanuele", email: "" },
   { nome: "Az. Agr. Antico Gelso", email: "" },
   { nome: "Az. Agr. Bertagna", email: "" },
@@ -511,7 +535,7 @@ const CLIENTI = [
   { nome: "SOC.AGR.F.LLI PELZ s.s.", email: "fratelli.pelz@gmail.com" },
   { nome: "SOCIETA'  AGRICOLA CARUNA S.S.", email: "info@carunafranciacorta.com" },
   { nome: "SOCIETA'  AGRICOLA CONTI DUCCO S.S.", email: "" },
-  { nome: "Società Agricola "Il Ceresé"", email: "" },
+  { nome: "Società Agricola \"Il Ceresé\"", email: "" },
   { nome: "SOCIETA' AGRICOLA BALZE GRIGIE SRL", email: "info@balzegrigie.it" },
   { nome: "SOCIETA' AGRICOLA BELLAVISTA S.S.", email: "" },
   { nome: "Società Agricola BERSI SERLINI S.r.l.", email: "" },
@@ -658,6 +682,13 @@ function emptyControlRows() {
     posizionamentoGabbietta: false,
     bidule: false,
     chiusura: false,
+    // colonne usate solo nel foglio Confezionamento
+    capsula: false,
+    fronte: false,
+    retro: false,
+    collare: false,
+    fascetta: false,
+    lotto: false,
   }));
 }
 
@@ -677,7 +708,11 @@ function emptyProdotto() {
     sedimento: "",
     bottFormato: "",
     bottLotto: "",
-    bottiglieFatte: "",
+    bottiglieFatte: "", // colonna "Bottiglia"
+    qtaMagnum: "",
+    qtaAltro: "",
+    incartonamento: false, // solo Confezionamento
+    incartonamentoTipo: "", // solo Confezionamento
     note: "",
     controlli: emptyControlRows(),
   };
@@ -799,13 +834,17 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
 // ---------------------------------------------------------------------------
 // Tabella controlli — rotolo di rilevazioni ogni 15'
 // ---------------------------------------------------------------------------
-function ControlTable({ rows, onChange }) {
+function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
   const update = (idx, patch) => {
     const next = rows.slice();
     next[idx] = { ...next[idx], ...patch };
     onChange(next);
   };
-  const filledCount = rows.filter((r) => r.livello !== "").length;
+  const filledCount = confezionamento
+    ? rows.filter(
+        (r) => r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
+      ).length
+    : rows.filter((r) => r.livello !== "").length;
 
   return (
     <div style={styles.controlBlock}>
@@ -821,89 +860,131 @@ function ControlTable({ rows, onChange }) {
         </div>
       </div>
 
-      <div style={styles.controlTableWrap}>
-        <div style={styles.controlTableHead}>
-          <span style={{ width: 64 }}>ora</span>
-          <span style={{ flex: 1 }}>livello (mm)</span>
-          <span style={{ flex: 1 }}>dosaggio (ml)</span>
-          <span style={{ flex: 1 }}>inser. tappo (mm)</span>
-          <span style={{ width: 76, textAlign: "center" }}>bidule</span>
-          <span style={{ width: 76, textAlign: "center" }}>tappo</span>
-          <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
-          <span style={{ width: 76, textAlign: "center" }}>gabbietta</span>
-        </div>
-        {rows.map((r, i) => (
-          <div
-            key={r.ora}
-            style={{
-              ...styles.controlRow,
-              background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
-            }}
-          >
-            <span style={styles.controlTime}>{r.ora}</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="—"
-              value={r.livello}
-              onChange={(e) => update(i, { livello: e.target.value })}
-              style={styles.controlInput}
-            />
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="—"
-              value={r.dosaggio}
-              onChange={(e) => update(i, { dosaggio: e.target.value })}
-              style={styles.controlInput}
-            />
-            <input
-              type="number"
-              inputMode="numeric"
-              placeholder="—"
-              value={r.inserimentoTappo}
-              onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
-              style={styles.controlInput}
-            />
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.bidule}
-                onChange={(e) => update(i, { bidule: e.target.checked })}
-                style={styles.checkbox}
-              />
-            </label>
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.chiusura}
-                onChange={(e) => update(i, { chiusura: e.target.checked })}
-                style={styles.checkbox}
-              />
-            </label>
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.integritaTappo}
-                onChange={(e) =>
-                  update(i, { integritaTappo: e.target.checked })
-                }
-                style={styles.checkbox}
-              />
-            </label>
-            <label style={styles.checkCell}>
-              <input
-                type="checkbox"
-                checked={r.posizionamentoGabbietta}
-                onChange={(e) =>
-                  update(i, { posizionamentoGabbietta: e.target.checked })
-                }
-                style={styles.checkbox}
-              />
-            </label>
+      {confezionamento ? (
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ flex: 1, textAlign: "center" }}>capsula</span>
+            <span style={{ flex: 1, textAlign: "center" }}>fronte</span>
+            <span style={{ flex: 1, textAlign: "center" }}>retro</span>
+            <span style={{ flex: 1, textAlign: "center" }}>collare</span>
+            <span style={{ flex: 1, textAlign: "center" }}>fascetta</span>
+            <span style={{ flex: 1, textAlign: "center" }}>lotto</span>
           </div>
-        ))}
-      </div>
+          {rows.map((r, i) => (
+            <div
+              key={r.ora}
+              style={{
+                ...styles.controlRow,
+                background:
+                  r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
+                    ? "rgba(201,162,39,0.06)"
+                    : "transparent",
+              }}
+            >
+              <span style={styles.controlTime}>{r.ora}</span>
+              {["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map(
+                (campo) => (
+                  <label key={campo} style={{ ...styles.checkCell, flex: 1 }}>
+                    <input
+                      type="checkbox"
+                      checked={r[campo]}
+                      onChange={(e) => update(i, { [campo]: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                )
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ flex: 1 }}>livello (mm)</span>
+            <span style={{ flex: 1 }}>dosaggio (ml)</span>
+            <span style={{ flex: 1 }}>inser. tappo (mm)</span>
+            <span style={{ width: 76, textAlign: "center" }}>bidule</span>
+            <span style={{ width: 76, textAlign: "center" }}>tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>
+              {tiraggio ? "posiz. bidule" : "gabbietta"}
+            </span>
+          </div>
+          {rows.map((r, i) => (
+            <div
+              key={r.ora}
+              style={{
+                ...styles.controlRow,
+                background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
+              }}
+            >
+              <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.livello}
+                onChange={(e) => update(i, { livello: e.target.value })}
+                style={styles.controlInput}
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.dosaggio}
+                onChange={(e) => update(i, { dosaggio: e.target.value })}
+                style={styles.controlInput}
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.inserimentoTappo}
+                onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
+                style={styles.controlInput}
+              />
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.bidule}
+                  onChange={(e) => update(i, { bidule: e.target.checked })}
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.chiusura}
+                  onChange={(e) => update(i, { chiusura: e.target.checked })}
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.integritaTappo}
+                  onChange={(e) =>
+                    update(i, { integritaTappo: e.target.checked })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.posizionamentoGabbietta}
+                  onChange={(e) =>
+                    update(i, { posizionamentoGabbietta: e.target.checked })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -911,7 +992,136 @@ function ControlTable({ rows, onChange }) {
 // ---------------------------------------------------------------------------
 // Home — elenco lavorazioni
 // ---------------------------------------------------------------------------
-function Home({ onSelect, storico, operatore, onCambiaOperatore }) {
+// ---------------------------------------------------------------------------
+// Archivio rapportini — solo amministratori, legge dal database condiviso
+// ---------------------------------------------------------------------------
+function ArchivioRapportini({ onBack }) {
+  const [righe, setRighe] = useState([]);
+  const [stato, setStato] = useState("carico"); // carico | ok | errore
+  const [filtro, setFiltro] = useState("");
+
+  useEffect(() => {
+    let annullato = false;
+    conRiprovaDiRete(async () => {
+      const { data, error } = await supabase
+        .from("rapportini")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    })
+      .then((data) => {
+        if (annullato) return;
+        setRighe(data || []);
+        setStato("ok");
+      })
+      .catch((e) => {
+        if (annullato) return;
+        console.error("Errore lettura archivio:", e.message);
+        setStato("errore");
+      });
+    return () => {
+      annullato = true;
+    };
+  }, []);
+
+  const scarica = (riga) => {
+    if (!riga.pdf_base64) return;
+    const link = document.createElement("a");
+    link.href = `data:application/pdf;base64,${riga.pdf_base64}`;
+    const dataFile = riga.created_at
+      ? new Date(riga.created_at).toISOString().slice(0, 10)
+      : "rapportino";
+    link.download = `${(riga.cliente || "cliente")
+      .toLowerCase()
+      .replace(/\s+/g, "-")}_${(riga.lavorazione || "rapportino")
+      .toLowerCase()
+      .replace(/\s+/g, "-")}_${dataFile}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const righeFiltrate = righe.filter((r) => {
+    if (!filtro.trim()) return true;
+    const t = filtro.toLowerCase();
+    return (
+      (r.cliente || "").toLowerCase().includes(t) ||
+      (r.vino || "").toLowerCase().includes(t) ||
+      (r.operatore || "").toLowerCase().includes(t) ||
+      (r.lavorazione || "").toLowerCase().includes(t)
+    );
+  });
+
+  return (
+    <div style={styles.formWrap}>
+      <div style={styles.formHeader}>
+        <button onClick={onBack} style={styles.backBtn}>
+          ← home
+        </button>
+        <div style={styles.formTitleRow}>
+          <h2 style={styles.formTitle}>Archivio rapportini</h2>
+        </div>
+      </div>
+
+      <input
+        type="text"
+        placeholder="Cerca per cliente, vino, operatore, lavorazione..."
+        value={filtro}
+        onChange={(e) => setFiltro(e.target.value)}
+        style={{ ...styles.input, marginBottom: 16 }}
+      />
+
+      {stato === "carico" && (
+        <p style={{ color: COLORS.textMuted }}>Carico l'archivio…</p>
+      )}
+      {stato === "errore" && (
+        <p style={{ color: "#D98F7A" }}>
+          Non riesco a leggere l'archivio (controlla la connessione). Riprova
+          tornando indietro e riaprendo.
+        </p>
+      )}
+      {stato === "ok" && righeFiltrate.length === 0 && (
+        <p style={{ color: COLORS.textMuted }}>Nessun rapportino trovato.</p>
+      )}
+
+      <div style={styles.archivioList}>
+        {righeFiltrate.map((r) => (
+          <div key={r.id} style={styles.archivioRow}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={styles.archivioLav}>{r.lavorazione}</div>
+              <div style={styles.archivioCliente}>{r.cliente || "—"}</div>
+              <div style={styles.archivioMeta}>
+                {r.vino ? `${r.vino} · ` : ""}
+                {r.operatore || "—"}
+                {r.created_at
+                  ? " · " +
+                    new Date(r.created_at).toLocaleString("it-IT", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })
+                  : ""}
+              </div>
+            </div>
+            <button
+              onClick={() => scarica(r)}
+              style={styles.homeBtn}
+              disabled={!r.pdf_base64}
+            >
+              Scarica PDF
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
+  const isAdmin = AMMINISTRATORI.includes(operatore);
   return (
     <div style={styles.homeWrap}>
       <header style={styles.homeHeader}>
@@ -938,6 +1148,12 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore }) {
           </div>
         </div>
       </header>
+
+      {isAdmin && (
+        <button onClick={onArchivio} style={styles.archivioBtn}>
+          📁 Archivio rapportini
+        </button>
+      )}
 
       <div style={styles.tileGrid}>
         {LAVORAZIONI.map((l) => (
@@ -1214,6 +1430,45 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           emailAggiuntiva,
         });
       }, 600);
+
+      // Manda una copia al database condiviso (archivio), se c'è connessione.
+      // Riprova automaticamente in caso di errore di rete (bug noto di
+      // Safari sulle app installate su iPhone). Se fallisce comunque, il
+      // PDF resta scaricato sul telefono: non blocchiamo il salvataggio.
+      window.alert("ARCHIVIO — avvio tentativo di salvataggio…");
+      try {
+        const pdfBase64 = doc.output("datauristring").split(",")[1];
+        const vinoRiepilogo = full
+          ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
+          : form.vino;
+        conRiprovaDiRete(async () => {
+          const { error } = await supabase.from("rapportini").insert({
+            lavorazione: lav.label,
+            cliente: form.cliente,
+            vino: vinoRiepilogo,
+            operatore: nomeOperatore,
+            dettagli: `Data intervento: ${form.data || "—"}`,
+            pdf_base64: pdfBase64,
+          });
+          if (error) throw error;
+        })
+          .then(() => {
+            window.alert("ARCHIVIO — salvato correttamente ✓");
+          })
+          .catch((e) => {
+            console.error("Errore salvataggio archivio (dopo i tentativi):", e);
+            window.alert(
+              "ARCHIVIO — errore dopo i tentativi:\n" +
+                "message: " + (e.message || "—") + "\n" +
+                "code: " + (e.code || "—") + "\n" +
+                "details: " + (e.details || "—") + "\n" +
+                "hint: " + (e.hint || "—")
+            );
+          });
+      } catch (e) {
+        console.error("Errore preparazione dati per l'archivio:", e);
+        window.alert("ARCHIVIO — errore prima dell'invio:\n" + e.message);
+      }
     } catch (e) {
       console.error("Errore nella generazione del PDF:", e);
     }
@@ -1322,7 +1577,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
-                <div style={styles.sectionLabel}>Tappo</div>
+                <div style={styles.sectionLabel}>
+                  {lavorazioneId === "confezionamento" ? "Capsula" : "Tappo"}
+                </div>
                 <div style={styles.fieldGrid3}>
                   <Field label="Tipo">
                     <input
@@ -1353,7 +1610,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   </Field>
                 </div>
 
-                <div style={styles.sectionLabel}>Gabbietta</div>
+                {lavorazioneId !== "confezionamento" && (
+                  <>
+                <div style={styles.sectionLabel}>
+                  {lavorazioneId === "tiraggio" ? "Bidule" : "Gabbietta"}
+                </div>
                 <div style={styles.fieldGrid3}>
                   <Field label="Tipo">
                     <input
@@ -1383,7 +1644,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     />
                   </Field>
                 </div>
+                  </>
+                )}
 
+                {lavorazioneId !== "tiraggio" && lavorazioneId !== "confezionamento" && (
+                  <>
                 <div style={styles.sectionLabel}>Liqueur</div>
                 <div style={styles.fieldGrid2}>
                   <Field label="Dosaggio">
@@ -1437,6 +1702,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     </label>
                   ))}
                 </div>
+                  </>
+                )}
 
                 <div style={styles.sectionLabel}>Bottiglie</div>
                 <div style={styles.fieldGrid2}>
@@ -1461,6 +1728,55 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   </Field>
                 </div>
 
+                {lavorazioneId === "confezionamento" && (
+                  <>
+                    <label style={styles.bioRow}>
+                      <input
+                        type="checkbox"
+                        checked={p.incartonamento}
+                        onChange={(e) =>
+                          setProdotto(idx, { incartonamento: e.target.checked })
+                        }
+                        style={styles.checkbox}
+                      />
+                      <span style={styles.bioText}>INCARTONAMENTO</span>
+                    </label>
+                    <div style={styles.sedimentoRow}>
+                      {[
+                        { value: "nastratrice", label: "Nastratrice" },
+                        { value: "automatico", label: "Automatico" },
+                        { value: "astuccio", label: "Astuccio" },
+                      ].map((opt) => (
+                        <label
+                          key={opt.value}
+                          style={{
+                            ...styles.sedimentoOption,
+                            borderColor:
+                              p.incartonamentoTipo === opt.value
+                                ? COLORS.gold
+                                : COLORS.border,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={p.incartonamentoTipo === opt.value}
+                            onChange={() =>
+                              setProdotto(idx, {
+                                incartonamentoTipo:
+                                  p.incartonamentoTipo === opt.value
+                                    ? ""
+                                    : opt.value,
+                              })
+                            }
+                            style={styles.checkbox}
+                          />
+                          <span>{opt.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                )}
+
                 <Field label="Note">
                   <textarea
                     style={{ ...styles.input, ...styles.textarea }}
@@ -1472,6 +1788,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                 <ControlTable
                   rows={p.controlli}
                   onChange={(controlli) => setProdotto(idx, { controlli })}
+                  tiraggio={lavorazioneId === "tiraggio"}
+                  confezionamento={lavorazioneId === "confezionamento"}
                 />
               </div>
             ))}
@@ -1491,14 +1809,16 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
               <div style={styles.qtaTable}>
                 <div style={styles.qtaHead}>
                   <span style={{ flex: 1 }}>vino</span>
-                  <span style={{ width: 110, textAlign: "right" }}>bottiglie</span>
+                  <span style={styles.qtaColHead}>Bottiglia</span>
+                  <span style={styles.qtaColHead}>Magnum</span>
+                  <span style={styles.qtaColHead}>Altro</span>
                 </div>
                 {form.prodotti.map((p, idx) => (
                   <div key={idx} style={styles.qtaRow}>
-                    <span style={styles.qtaLabel}>
-                      Vino {idx + 1}
-                      {p.vino ? ` — ${p.vino}` : ""}
-                    </span>
+                    <div style={styles.qtaLabelWrap}>
+                      <span style={styles.qtaLabel}>Vino {idx + 1}</span>
+                      {p.vino ? <span style={styles.qtaSub}>{p.vino}</span> : null}
+                    </div>
                     <input
                       type="number"
                       inputMode="numeric"
@@ -1507,6 +1827,26 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                       value={p.bottiglieFatte || ""}
                       onChange={(e) =>
                         setProdotto(idx, { bottiglieFatte: e.target.value })
+                      }
+                      style={styles.qtaInput}
+                    />
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      placeholder="0"
+                      value={p.qtaMagnum || ""}
+                      onChange={(e) =>
+                        setProdotto(idx, { qtaMagnum: e.target.value })
+                      }
+                      style={styles.qtaInput}
+                    />
+                    <input
+                      type="text"
+                      placeholder="0"
+                      value={p.qtaAltro || ""}
+                      onChange={(e) =>
+                        setProdotto(idx, { qtaAltro: e.target.value })
                       }
                       style={styles.qtaInput}
                     />
@@ -1543,7 +1883,29 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           />
         </div>
 
-        <Field label="Email aggiuntiva (facoltativa)">
+        <div style={styles.homeRow}>
+          <button type="button" onClick={onBack} style={styles.homeBtn}>
+            ← Torna alla home
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Tornare alla home e cancellare questo rapportino compilato finora?"
+                )
+              ) {
+                clearDraft(lavorazioneId);
+                onBack();
+              }
+            }}
+            style={styles.homeBtnDanger}
+          >
+            Torna alla home e cancella
+          </button>
+        </div>
+
+        <Field label="Email cliente (per l'invio del rapportino)">
           <input
             type="email"
             style={styles.input}
@@ -1622,7 +1984,10 @@ export default function App() {
           onSelect={(id) => setView(id)}
           operatore={operatore}
           onCambiaOperatore={cambiaOperatore}
+          onArchivio={() => setView("archivio")}
         />
+      ) : view === "archivio" ? (
+        <ArchivioRapportini onBack={() => setView("home")} />
       ) : (
         <InterventoForm
           lavorazioneId={view}
@@ -1733,6 +2098,43 @@ const styles = {
     color: COLORS.textMuted,
     textTransform: "capitalize",
   },
+  archivioBtn: {
+    display: "block",
+    width: "100%",
+    background: "rgba(201,162,39,0.10)",
+    border: `1px solid rgba(201,162,39,0.4)`,
+    borderRadius: 9,
+    padding: "11px 14px",
+    color: COLORS.gold,
+    fontSize: 13.5,
+    fontFamily: FONT_BODY,
+    cursor: "pointer",
+    marginBottom: 14,
+    textAlign: "left",
+  },
+  archivioList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  archivioRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 9,
+    padding: "12px 14px",
+    background: COLORS.surface,
+  },
+  archivioLav: {
+    fontSize: 11,
+    color: COLORS.gold,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  archivioCliente: { fontFamily: FONT_DISPLAY, fontSize: 15.5 },
+  archivioMeta: { fontSize: 11.5, color: COLORS.textMuted, marginTop: 2 },
+
   tileGrid: { display: "flex", flexDirection: "column", gap: 8 },
   tile: {
     display: "flex",
@@ -2028,9 +2430,18 @@ const styles = {
     alignItems: "center",
     borderBottom: "1px solid rgba(237,232,221,0.06)",
   },
-  qtaLabel: { flex: 1, fontSize: 13.5, fontFamily: FONT_DISPLAY },
+  qtaLabelWrap: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column" },
+  qtaLabel: { fontSize: 13.5, fontFamily: FONT_DISPLAY },
+  qtaSub: {
+    fontSize: 11,
+    color: COLORS.textMuted,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  qtaColHead: { width: 62, textAlign: "right" },
   qtaInput: {
-    width: 110,
+    width: 62,
     background: "transparent",
     border: "none",
     borderBottom: `1px solid ${COLORS.borderStrong}`,
@@ -2063,6 +2474,34 @@ const styles = {
     fontSize: 11,
     cursor: "pointer",
     padding: 0,
+  },
+
+  homeRow: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+  homeBtn: {
+    flex: "1 1 auto",
+    background: COLORS.surface,
+    border: `1px solid ${COLORS.borderStrong}`,
+    borderRadius: 8,
+    padding: "12px 16px",
+    color: COLORS.text,
+    fontSize: 13.5,
+    fontFamily: FONT_BODY,
+    cursor: "pointer",
+  },
+  homeBtnDanger: {
+    flex: "1 1 auto",
+    background: "rgba(181,72,47,0.10)",
+    border: `1px solid rgba(181,72,47,0.45)`,
+    borderRadius: 8,
+    padding: "12px 16px",
+    color: "#D98F7A",
+    fontSize: 13.5,
+    fontFamily: FONT_BODY,
+    cursor: "pointer",
   },
 
   saveRow: {
