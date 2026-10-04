@@ -37,6 +37,9 @@ export function generaRapportinoPDF({
   lavorazioneLabel,
   cliente,
   data,
+  sanificazione,
+  oraInizio,
+  oraFine,
   prodotti, // array, oppure null se "Altri lavori"
   vinoSemplice,
   noteSemplice,
@@ -62,6 +65,9 @@ export function generaRapportinoPDF({
   y = titolo(doc, y, lavorazioneLabel || "Intervento");
   y = riga(doc, y, "Cliente", cliente);
   y = riga(doc, y, "Data", data);
+  if (lavorazioneLabel !== "Altri lavori") {
+    y = riga(doc, y, "Sanificazione", sanificazione ? "Sì" : "No");
+  }
   y += 2;
 
   if (prodotti && prodotti.length) {
@@ -221,6 +227,19 @@ export function generaRapportinoPDF({
     y += 2;
   }
 
+  if (oraInizio || oraFine) {
+    y = checkNuovaPagina(doc, y + 2);
+    y = riga(
+      doc,
+      y,
+      "Orario",
+      [oraInizio && `inizio ${oraInizio}`, oraFine && `fine ${oraFine}`]
+        .filter(Boolean)
+        .join(" — ")
+    );
+    y += 2;
+  }
+
   // Firme
   y = checkNuovaPagina(doc, y + 6, 230);
   y = titolo(doc, y, "Firme");
@@ -251,9 +270,9 @@ export function generaRapportinoPDF({
     doc.text(`Email aggiuntiva: ${emailAggiuntiva}`, 14, sigY + 38);
   }
 
-  const filename = `rapportino_${(lavorazioneLabel || "intervento")
+  const filename = `${(cliente || "cliente")
     .toLowerCase()
-    .replace(/\s+/g, "-")}_${(cliente || "cliente")
+    .replace(/\s+/g, "-")}_${(lavorazioneLabel || "intervento")
     .toLowerCase()
     .replace(/\s+/g, "-")}_${(data || "").replace(/\//g, "-")}.pdf`;
 
@@ -262,9 +281,11 @@ export function generaRapportinoPDF({
 
 // Apre l'app Mail con destinatario/oggetto già pronti.
 // Il PDF va allegato manualmente da chi invia (limite dei link mailto).
+// Il destinatario è il cliente (email dall'elenco clienti o digitata a mano).
 export function apriEmailConDestinatari({ filename, cliente, lavorazioneLabel, emailAggiuntiva }) {
-  const destinatari = ["soluzioni@oenoitalia.com"];
-  if (emailAggiuntiva) destinatari.push(emailAggiuntiva);
+  if (!emailAggiuntiva) return; // nessuna email cliente nota: non apriamo nulla
+
+  const destinatari = [emailAggiuntiva];
 
   const oggetto = encodeURIComponent(
     `Rapportino ${lavorazioneLabel || ""} — ${cliente || ""}`.trim()

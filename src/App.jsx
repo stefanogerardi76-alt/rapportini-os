@@ -6,6 +6,25 @@ import { supabase } from "./supabaseClient";
 // Amministratori — vedono il pulsante "Archivio rapportini" in home
 const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović"];
 
+// Su iPhone, quando l'app è installata sulla schermata Home, Safari a volte
+// blocca in modo casuale le richieste di rete verso siti esterni (errore
+// "Load failed") — è un bug noto di iOS, non del nostro codice. Riprovare
+// dopo una breve pausa di solito risolve.
+async function conRiprovaDiRete(azione, tentativi = 3, attesaMs = 900) {
+  let ultimoErrore;
+  for (let i = 0; i < tentativi; i++) {
+    try {
+      return await azione();
+    } catch (e) {
+      ultimoErrore = e;
+      if (i < tentativi - 1) {
+        await new Promise((r) => setTimeout(r, attesaMs));
+      }
+    }
+  }
+  throw ultimoErrore;
+}
+
 // ---------------------------------------------------------------------------
 // RAPPORTINI OS
 // Registro interventi da cantina — un pannello di controllo, non un modulo.
@@ -703,6 +722,7 @@ function emptyFullForm() {
   return {
     cliente: "",
     data: "",
+    sanificazione: false,
     prodotti: [emptyProdotto()],
   };
 }
@@ -983,19 +1003,23 @@ function ArchivioRapportini({ onBack }) {
 
   useEffect(() => {
     let annullato = false;
-    supabase
-      .from("rapportini")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
+    conRiprovaDiRete(async () => {
+      const { data, error } = await supabase
+        .from("rapportini")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data;
+    })
+      .then((data) => {
         if (annullato) return;
-        if (error) {
-          console.error("Errore lettura archivio:", error.message);
-          setStato("errore");
-        } else {
-          setRighe(data || []);
-          setStato("ok");
-        }
+        setRighe(data || []);
+        setStato("ok");
+      })
+      .catch((e) => {
+        if (annullato) return;
+        console.error("Errore lettura archivio:", e.message);
+        setStato("errore");
       });
     return () => {
       annullato = true;
@@ -1099,6 +1123,28 @@ function ArchivioRapportini({ onBack }) {
 
 function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
   const isAdmin = AMMINISTRATORI.includes(operatore);
+  const [conteggioArchivio, setConteggioArchivio] = useState(null);
+
+  useEffect(() => {
+    let annullato = false;
+    conRiprovaDiRete(async () => {
+      const { count, error } = await supabase
+        .from("rapportini")
+        .select("*", { count: "exact", head: true });
+      if (error) throw error;
+      return count;
+    })
+      .then((count) => {
+        if (!annullato) setConteggioArchivio(count);
+      })
+      .catch((e) => {
+        console.error("Errore conteggio archivio:", e);
+      });
+    return () => {
+      annullato = true;
+    };
+  }, []);
+
   return (
     <div style={styles.homeWrap}>
       <header style={styles.homeHeader}>
@@ -1125,6 +1171,12 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
           </div>
         </div>
       </header>
+
+      {conteggioArchivio !== null && (
+        <div style={styles.contatoreArchivio}>
+          Rapportini archiviati: {conteggioArchivio}
+        </div>
+      )}
 
       {isAdmin && (
         <button onClick={onArchivio} style={styles.archivioBtn}>
@@ -1316,6 +1368,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const [emailAggiuntiva, setEmailAggiuntiva] = useState(
     bozzaIniziale?.emailAggiuntiva || ""
   );
+  const [oraInizio, setOraInizio] = useState(bozzaIniziale?.oraInizio || "");
+  const [oraFine, setOraFine] = useState(bozzaIniziale?.oraFine || "");
   const [saved, setSaved] = useState(false);
   const [bozzaRipristinata] = useState(!!bozzaIniziale);
 
@@ -1328,6 +1382,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       nomeOperatore,
       nomeCliente,
       emailAggiuntiva,
+      oraInizio,
+      oraFine,
     });
   }, [
     lavorazioneId,
@@ -1337,6 +1393,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     nomeOperatore,
     nomeCliente,
     emailAggiuntiva,
+    oraInizio,
+    oraFine,
   ]);
 
   const set = useCallback((patch) => setForm((f) => ({ ...f, ...patch })), []);
@@ -1389,6 +1447,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         lavorazioneLabel: lav.label,
         cliente: form.cliente,
         data: form.data,
+        sanificazione: form.sanificazione,
+        oraInizio,
+        oraFine,
         prodotti: full ? form.prodotti : null,
         vinoSemplice: form.vino,
         noteSemplice: form.note,
@@ -1409,35 +1470,39 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       }, 600);
 
       // Manda una copia al database condiviso (archivio), se c'è connessione.
-      // Se fallisce (es. senza rete), il PDF resta comunque scaricato sul
-      // telefono: non blocchiamo il salvataggio per questo.
-      // NOTA DIAGNOSTICA TEMPORANEA: mostriamo un avviso a schermo con
-      // l'esito, per capire da telefono perché l'archivio non si popola.
-      // Da togliere una volta risolto.
+      // Riprova automaticamente in caso di errore di rete (bug noto di
+      // Safari sulle app installate su iPhone). Se fallisce comunque, il
+      // PDF resta scaricato sul telefono: non blocchiamo il salvataggio.
+      window.alert("ARCHIVIO — avvio tentativo di salvataggio…");
       try {
         const pdfBase64 = doc.output("datauristring").split(",")[1];
         const vinoRiepilogo = full
           ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
           : form.vino;
-        supabase
-          .from("rapportini")
-          .insert({
+        // TEST DIAGNOSTICO TEMPORANEO: PDF escluso apposta, per capire se è
+        // il peso dei dati a bloccare il salvataggio su Safari/iPhone.
+        conRiprovaDiRete(async () => {
+          const { error } = await supabase.from("rapportini").insert({
             lavorazione: lav.label,
             cliente: form.cliente,
             vino: vinoRiepilogo,
             operatore: nomeOperatore,
-            dettagli: `Data intervento: ${form.data || "—"}`,
-            pdf_base64: pdfBase64,
+            dettagli: `Data intervento: ${form.data || "—"} [TEST senza PDF]`,
+          });
+          if (error) throw error;
+        })
+          .then(() => {
+            window.alert("ARCHIVIO — salvato correttamente ✓");
           })
-          .then(({ error }) => {
-            if (error) {
-              console.error("Errore salvataggio archivio:", error.message);
-              window.alert(
-                "ARCHIVIO — errore nel salvataggio:\n" + error.message
-              );
-            } else {
-              window.alert("ARCHIVIO — salvato correttamente ✓");
-            }
+          .catch((e) => {
+            console.error("Errore salvataggio archivio (dopo i tentativi):", e);
+            window.alert(
+              "ARCHIVIO — errore dopo i tentativi:\n" +
+                "message: " + (e.message || "—") + "\n" +
+                "code: " + (e.code || "—") + "\n" +
+                "details: " + (e.details || "—") + "\n" +
+                "hint: " + (e.hint || "—")
+            );
           });
       } catch (e) {
         console.error("Errore preparazione dati per l'archivio:", e);
@@ -1504,6 +1569,18 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
             />
           </Field>
         </div>
+
+        {full && (
+          <label style={styles.bioRow}>
+            <input
+              type="checkbox"
+              checked={form.sanificazione}
+              onChange={(e) => set({ sanificazione: e.target.checked })}
+              style={styles.checkbox}
+            />
+            <span style={styles.bioText}>SANIFICAZIONE</span>
+          </label>
+        )}
 
         {full ? (
           <>
@@ -1840,6 +1917,25 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </Field>
         )}
 
+        <div style={styles.fieldGrid2}>
+          <Field label="Ora inizio">
+            <input
+              type="time"
+              style={styles.input}
+              value={oraInizio}
+              onChange={(e) => setOraInizio(e.target.value)}
+            />
+          </Field>
+          <Field label="Ora fine">
+            <input
+              type="time"
+              style={styles.input}
+              value={oraFine}
+              onChange={(e) => setOraFine(e.target.value)}
+            />
+          </Field>
+        </div>
+
         <div style={styles.sigGrid}>
           <SignaturePad
             label="Firma operatore"
@@ -2071,6 +2167,11 @@ const styles = {
     fontSize: 11.5,
     color: COLORS.textMuted,
     textTransform: "capitalize",
+  },
+  contatoreArchivio: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    marginBottom: 10,
   },
   archivioBtn: {
     display: "block",
