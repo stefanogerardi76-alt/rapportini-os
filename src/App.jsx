@@ -1454,6 +1454,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     // Genera il PDF del rapportino, lo scarica e apre l'email pronta
     try {
       const { doc, filename } = generaRapportinoPDF({
+        lavorazioneId,
         lavorazioneLabel: lav.label,
         cliente: form.cliente,
         data: form.data,

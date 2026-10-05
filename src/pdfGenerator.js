@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { PROCEDURE_SANIFICAZIONE } from "./procedureSanificazione";
 
 // ---------------------------------------------------------------------------
 // Genera il PDF di un rapportino chiuso.
@@ -33,7 +34,103 @@ function checkNuovaPagina(doc, y, margine = 270) {
   return y;
 }
 
+// Aggiunge, come pagina a sé, la scheda di sanificazione della lavorazione
+// indicata (se esiste). Non fa nulla se non c'è ancora una scheda per
+// quella lavorazione (le altre arriveranno più avanti).
+function aggiungiSchedaSanificazione(doc, lavorazioneId) {
+  const scheda = PROCEDURE_SANIFICAZIONE[lavorazioneId];
+  if (!scheda) return;
+
+  doc.addPage();
+  let y = 20;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text(scheda.titolo, 14, y);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.text(scheda.revisione, 196, y, { align: "right" });
+  y += 7;
+
+  doc.setDrawColor(180, 150, 60);
+  doc.line(14, y, 196, y);
+  y += 8;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.text(scheda.linea, 14, y);
+  y += 8;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  if (scheda.reparti?.length) {
+    doc.text("Reparto: " + scheda.reparti.join("  /  "), 14, y);
+    y += 6;
+  }
+  if (scheda.responsabile) {
+    doc.text("Responsabile: " + scheda.responsabile, 14, y);
+    y += 6;
+  }
+  if (scheda.frequenza) {
+    doc.text("Frequenza: " + scheda.frequenza, 14, y);
+    y += 6;
+  }
+  y += 3;
+
+  if (scheda.tabella?.righe?.length) {
+    const colX = [14, 90, 150];
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    scheda.tabella.intestazioni.forEach((h, i) => doc.text(h, colX[i], y));
+    y += 5;
+    doc.setFont("helvetica", "normal");
+    scheda.tabella.righe.forEach((riga) => {
+      riga.forEach((cella, i) => doc.text(String(cella), colX[i], y));
+      y += 5.5;
+    });
+    y += 4;
+  }
+
+  if (scheda.procedura?.length) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10.5);
+    doc.text("Procedura", 14, y);
+    y += 6;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    scheda.procedura.forEach((passo, i) => {
+      const testo = doc.splitTextToSize(`${i + 1}. ${passo}`, 182);
+      doc.text(testo, 14, y);
+      y += 5 * testo.length;
+    });
+    y += 2;
+  }
+
+  if (scheda.notaFinale) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8.5);
+    const testo = doc.splitTextToSize(scheda.notaFinale, 182);
+    doc.text(testo, 14, y);
+    y += 4.5 * testo.length + 4;
+  }
+
+  if (scheda.errori?.length) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10.5);
+    doc.text("Errori più comuni da evitare", 14, y);
+    y += 6;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9.5);
+    scheda.errori.forEach((errore) => {
+      const testo = doc.splitTextToSize(`• ${errore}`, 182);
+      doc.text(testo, 14, y);
+      y += 5 * testo.length;
+    });
+  }
+}
+
 export function generaRapportinoPDF({
+  lavorazioneId,
   lavorazioneLabel,
   cliente,
   data,
@@ -286,6 +383,10 @@ export function generaRapportinoPDF({
     doc.setFontSize(8.5);
     doc.setTextColor(100, 100, 100);
     doc.text(`Email aggiuntiva: ${emailAggiuntiva}`, 14, sigY + 38);
+  }
+
+  if (sanificazione && lavorazioneId) {
+    aggiungiSchedaSanificazione(doc, lavorazioneId);
   }
 
   const filename = `${(cliente || "cliente")
