@@ -40,6 +40,8 @@ export function generaRapportinoPDF({
   sanificazione,
   oraInizio,
   oraFine,
+  oreViaggioAndata,
+  oreViaggioRitorno,
   prodotti, // array, oppure null se "Altri lavori"
   vinoSemplice,
   noteSemplice,
@@ -234,6 +236,22 @@ export function generaRapportinoPDF({
       y,
       "Orario",
       [oraInizio && `inizio ${oraInizio}`, oraFine && `fine ${oraFine}`]
+        .filter(Boolean)
+        .join(" — ")
+    );
+    y += 2;
+  }
+
+  if (oreViaggioAndata || oreViaggioRitorno) {
+    y = checkNuovaPagina(doc, y + 2);
+    y = riga(
+      doc,
+      y,
+      "Ore viaggio",
+      [
+        oreViaggioAndata && `andata ${oreViaggioAndata}`,
+        oreViaggioRitorno && `ritorno ${oreViaggioRitorno}`,
+      ]
         .filter(Boolean)
         .join(" — ")
     );

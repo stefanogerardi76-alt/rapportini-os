@@ -1370,6 +1370,12 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   );
   const [oraInizio, setOraInizio] = useState(bozzaIniziale?.oraInizio || "");
   const [oraFine, setOraFine] = useState(bozzaIniziale?.oraFine || "");
+  const [oreViaggioAndata, setOreViaggioAndata] = useState(
+    bozzaIniziale?.oreViaggioAndata || ""
+  );
+  const [oreViaggioRitorno, setOreViaggioRitorno] = useState(
+    bozzaIniziale?.oreViaggioRitorno || ""
+  );
   const [saved, setSaved] = useState(false);
   const [bozzaRipristinata] = useState(!!bozzaIniziale);
 
@@ -1384,6 +1390,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       emailAggiuntiva,
       oraInizio,
       oraFine,
+      oreViaggioAndata,
+      oreViaggioRitorno,
     });
   }, [
     lavorazioneId,
@@ -1395,6 +1403,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     emailAggiuntiva,
     oraInizio,
     oraFine,
+    oreViaggioAndata,
+    oreViaggioRitorno,
   ]);
 
   const set = useCallback((patch) => setForm((f) => ({ ...f, ...patch })), []);
@@ -1450,6 +1460,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         sanificazione: form.sanificazione,
         oraInizio,
         oraFine,
+        oreViaggioAndata,
+        oreViaggioRitorno,
         prodotti: full ? form.prodotti : null,
         vinoSemplice: form.vino,
         noteSemplice: form.note,
@@ -1932,6 +1944,33 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
               style={styles.input}
               value={oraFine}
               onChange={(e) => setOraFine(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div style={styles.fieldGrid2}>
+          <Field label="Ore viaggio andata">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.5"
+              min="0"
+              placeholder="es. 1,5"
+              style={styles.input}
+              value={oreViaggioAndata}
+              onChange={(e) => setOreViaggioAndata(e.target.value)}
+            />
+          </Field>
+          <Field label="Ore viaggio ritorno">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.5"
+              min="0"
+              placeholder="es. 1,5"
+              style={styles.input}
+              value={oreViaggioRitorno}
+              onChange={(e) => setOreViaggioRitorno(e.target.value)}
             />
           </Field>
         </div>
