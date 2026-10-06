@@ -139,6 +139,7 @@ export function generaRapportinoPDF({
   oraFine,
   oreViaggioAndata,
   oreViaggioRitorno,
+  altriOperatori,
   prodotti, // array, oppure null se "Altri lavori"
   vinoSemplice,
   noteSemplice,
@@ -352,6 +353,12 @@ export function generaRapportinoPDF({
         .filter(Boolean)
         .join(" — ")
     );
+    y += 2;
+  }
+
+  if (altriOperatori) {
+    y = checkNuovaPagina(doc, y + 2);
+    y = riga(doc, y, "Altro operatore", altriOperatori);
     y += 2;
   }
 

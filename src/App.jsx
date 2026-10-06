@@ -1376,6 +1376,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const [oreViaggioRitorno, setOreViaggioRitorno] = useState(
     bozzaIniziale?.oreViaggioRitorno || ""
   );
+  const [altriOperatori, setAltriOperatori] = useState(
+    bozzaIniziale?.altriOperatori || ""
+  );
   const [saved, setSaved] = useState(false);
   const [bozzaRipristinata] = useState(!!bozzaIniziale);
 
@@ -1392,6 +1395,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       oraFine,
       oreViaggioAndata,
       oreViaggioRitorno,
+      altriOperatori,
     });
   }, [
     lavorazioneId,
@@ -1405,6 +1409,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     oraFine,
     oreViaggioAndata,
     oreViaggioRitorno,
+    altriOperatori,
   ]);
 
   const set = useCallback((patch) => setForm((f) => ({ ...f, ...patch })), []);
@@ -1463,6 +1468,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         oraFine,
         oreViaggioAndata,
         oreViaggioRitorno,
+        altriOperatori,
         prodotti: full ? form.prodotti : null,
         vinoSemplice: form.vino,
         noteSemplice: form.note,
@@ -1975,6 +1981,16 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
             />
           </Field>
         </div>
+
+        <Field label="Secondo operatore / altro operatore">
+          <input
+            type="text"
+            style={styles.input}
+            placeholder="nome e cognome (o più nomi separati da virgola)"
+            value={altriOperatori}
+            onChange={(e) => setAltriOperatori(e.target.value)}
+          />
+        </Field>
 
         <div style={styles.sigGrid}>
           <SignaturePad
