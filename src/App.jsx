@@ -675,6 +675,7 @@ const CONTROL_SLOTS = buildControlSlots();
 function emptyControlRows() {
   return CONTROL_SLOTS.map((t) => ({
     ora: t,
+    bottiglieProdotte: "",
     livello: "",
     dosaggio: "",
     inserimentoTappo: "",
@@ -715,6 +716,13 @@ function emptyProdotto() {
     incartonamentoTipo: "", // solo Confezionamento
     note: "",
     controlli: emptyControlRows(),
+    // "Controlli di processo" — solo Confezionamento, uno per ogni vino
+    controlliProcesso: {
+      posizionamentoCapsule: "",
+      posizionamentoEtichette: "",
+      timbraturaLotto: "",
+      imballaggio: "",
+    },
   };
 }
 
@@ -723,6 +731,14 @@ function emptyFullForm() {
     cliente: "",
     data: "",
     sanificazione: false,
+    // "Controlli pre-operativi impianto/attrezzatura" — solo Confezionamento
+    controlliPreOperativi: {
+      verificaPulizia: "",
+      assenzaPartiDanneggiate: "",
+      puliziaBottiglia: "",
+      conformitaCapsule: "",
+      conformitaEtichette: "",
+    },
     prodotti: [emptyProdotto()],
   };
 }
@@ -835,6 +851,52 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
 // ---------------------------------------------------------------------------
 // Tabella controlli — rotolo di rilevazioni ogni 15'
 // ---------------------------------------------------------------------------
+// Tabella "Conforme / Non conforme / N.Applic." a scelta singola per riga.
+// Usata per i controlli pre-operativi e i controlli di processo (Confezionamento).
+const OPZIONI_CONFORME = [
+  { value: "conforme", label: "Conforme" },
+  { value: "nonConforme", label: "Non conforme" },
+  { value: "nApplic", label: "N.Applic." },
+];
+
+function TabellaControlliConforme({ titolo, righe, valori, onChange }) {
+  return (
+    <div style={styles.qtaBlock}>
+      <div style={styles.sectionLabel}>{titolo}</div>
+      <div style={styles.qtaTable}>
+        <div style={styles.qtaHead}>
+          <span style={{ flex: 1 }}>tipo controllo</span>
+          {OPZIONI_CONFORME.map((o) => (
+            <span key={o.value} style={styles.qtaColHead}>
+              {o.label}
+            </span>
+          ))}
+        </div>
+        {righe.map((r) => (
+          <div key={r.key} style={styles.controlRow}>
+            <span style={{ ...styles.qtaLabel, flex: 1 }}>{r.label}</span>
+            {OPZIONI_CONFORME.map((o) => (
+              <label key={o.value} style={{ ...styles.checkCell, width: 62 }}>
+                <input
+                  type="checkbox"
+                  checked={valori[r.key] === o.value}
+                  onChange={() =>
+                    onChange({
+                      ...valori,
+                      [r.key]: valori[r.key] === o.value ? "" : o.value,
+                    })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
   const update = (idx, patch) => {
     const next = rows.slice();
@@ -865,6 +927,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
         <div style={styles.controlTableWrap}>
           <div style={styles.controlTableHead}>
             <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
             <span style={{ flex: 1, textAlign: "center" }}>capsula</span>
             <span style={{ flex: 1, textAlign: "center" }}>fronte</span>
             <span style={{ flex: 1, textAlign: "center" }}>retro</span>
@@ -884,6 +947,16 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
               }}
             >
               <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.bottiglieProdotte}
+                onChange={(e) =>
+                  update(i, { bottiglieProdotte: e.target.value })
+                }
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+              />
               {["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map(
                 (campo) => (
                   <label key={campo} style={{ ...styles.checkCell, flex: 1 }}>
@@ -903,6 +976,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
         <div style={styles.controlTableWrap}>
           <div style={styles.controlTableHead}>
             <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
             <span style={{ flex: 1 }}>livello (mm)</span>
             <span style={{ flex: 1 }}>dosaggio (ml)</span>
             <span style={{ flex: 1 }}>inser. tappo (mm)</span>
@@ -922,6 +996,16 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
               }}
             >
               <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.bottiglieProdotte}
+                onChange={(e) =>
+                  update(i, { bottiglieProdotte: e.target.value })
+                }
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+              />
               <input
                 type="number"
                 inputMode="numeric"
@@ -1121,7 +1205,180 @@ function ArchivioRapportini({ onBack }) {
   );
 }
 
-function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
+// ---------------------------------------------------------------------------
+// Carica rapportino manualmente — per recuperare in archivio un PDF già
+// generato e inviato (es. per mancanza di rete al momento del salvataggio),
+// senza doverlo compilare di nuovo da zero. Solo amministratori.
+// ---------------------------------------------------------------------------
+function CaricaManuale({ onBack }) {
+  const [lavorazione, setLavorazione] = useState(LAVORAZIONI[0].label);
+  const [cliente, setCliente] = useState("");
+  const [vino, setVino] = useState("");
+  const [operatoreRapportino, setOperatoreRapportino] = useState("");
+  const [data, setData] = useState("");
+  const [file, setFile] = useState(null);
+  const [fileNome, setFileNome] = useState("");
+  const [caricando, setCaricando] = useState(false);
+  const [esito, setEsito] = useState(""); // "" | "ok" | errore testuale
+
+  const leggiFileComeBase64 = (f) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(f);
+    });
+
+  const puoCaricare =
+    cliente.trim().length > 0 && !!file && !caricando;
+
+  const handleCarica = async () => {
+    if (!puoCaricare) return;
+    setCaricando(true);
+    setEsito("");
+    try {
+      const pdfBase64 = await leggiFileComeBase64(file);
+      await conRiprovaDiRete(async () => {
+        const { error } = await supabase.from("rapportini").insert({
+          lavorazione,
+          cliente,
+          vino,
+          operatore: operatoreRapportino,
+          dettagli: `Data intervento: ${data || "—"} [caricato manualmente]`,
+          pdf_base64: pdfBase64,
+        });
+        if (error) throw error;
+      });
+      setEsito("ok");
+      setCliente("");
+      setVino("");
+      setOperatoreRapportino("");
+      setData("");
+      setFile(null);
+      setFileNome("");
+    } catch (e) {
+      console.error("Errore caricamento manuale:", e);
+      setEsito(
+        "Nessuna connessione o errore nel salvataggio. Riprova quando hai rete."
+      );
+    } finally {
+      setCaricando(false);
+    }
+  };
+
+  return (
+    <div style={styles.formWrap}>
+      <div style={styles.formHeader}>
+        <button onClick={onBack} style={styles.backBtn}>
+          ← home
+        </button>
+        <div style={styles.formTitleRow}>
+          <h2 style={styles.formTitle}>Carica rapportino (PDF già fatto)</h2>
+        </div>
+      </div>
+
+      <div style={styles.formBody}>
+        <p style={{ color: COLORS.textMuted, marginTop: 0 }}>
+          Usa questa pagina solo per recuperare in archivio un rapportino il
+          cui PDF è già stato generato e inviato (es. per mancanza di rete al
+          momento del salvataggio). Compila i dati principali e allega il
+          file PDF: verrà aggiunto all'archivio condiviso esattamente come un
+          rapportino normale.
+        </p>
+
+        <Field label="Lavorazione" required>
+          <select
+            style={styles.input}
+            value={lavorazione}
+            onChange={(e) => setLavorazione(e.target.value)}
+          >
+            {LAVORAZIONI.map((l) => (
+              <option key={l.id} value={l.label}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Cliente" required>
+          <input
+            style={styles.input}
+            value={cliente}
+            onChange={(e) => setCliente(e.target.value)}
+          />
+        </Field>
+
+        <Field label="Vino">
+          <input
+            style={styles.input}
+            value={vino}
+            onChange={(e) => setVino(e.target.value)}
+          />
+        </Field>
+
+        <Field label="Operatore">
+          <input
+            style={styles.input}
+            value={operatoreRapportino}
+            onChange={(e) => setOperatoreRapportino(e.target.value)}
+          />
+        </Field>
+
+        <Field label="Data intervento">
+          <input
+            type="date"
+            style={styles.input}
+            value={data}
+            onChange={(e) => setData(e.target.value)}
+          />
+        </Field>
+
+        <Field label="File PDF del rapportino" required>
+          <input
+            type="file"
+            accept="application/pdf"
+            style={styles.input}
+            onChange={(e) => {
+              const f = e.target.files?.[0] || null;
+              setFile(f);
+              setFileNome(f ? f.name : "");
+            }}
+          />
+          {fileNome && (
+            <span style={{ ...styles.saveHint, display: "block", marginTop: 6 }}>
+              {fileNome}
+            </span>
+          )}
+        </Field>
+
+        <div style={styles.saveRow}>
+          {esito && esito !== "ok" && (
+            <span style={{ ...styles.saveHint, color: "#D98F7A" }}>
+              {esito}
+            </span>
+          )}
+          <button
+            onClick={handleCarica}
+            disabled={!puoCaricare}
+            style={{
+              ...styles.saveBtn,
+              opacity: puoCaricare ? 1 : 0.4,
+              cursor: puoCaricare ? "pointer" : "not-allowed",
+            }}
+          >
+            {esito === "ok"
+              ? "Caricato in archivio ✓"
+              : caricando
+              ? "Caricamento in corso…"
+              : "Carica in archivio"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onCaricaManuale }) {
   const isAdmin = AMMINISTRATORI.includes(operatore);
   const [conteggioArchivio, setConteggioArchivio] = useState(null);
 
@@ -1179,9 +1436,14 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
       )}
 
       {isAdmin && (
-        <button onClick={onArchivio} style={styles.archivioBtn}>
-          📁 Archivio rapportini
-        </button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={onArchivio} style={styles.archivioBtn}>
+            📁 Archivio rapportini
+          </button>
+          <button onClick={onCaricaManuale} style={styles.archivioBtn}>
+            ⬆️ Carica rapportino (PDF)
+          </button>
+        </div>
       )}
 
       <div style={styles.tileGrid}>
@@ -1380,6 +1642,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     bozzaIniziale?.altriOperatori || ""
   );
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [bozzaRipristinata] = useState(!!bozzaIniziale);
 
   // Salva automaticamente la bozza a ogni modifica (nessuna connessione richiesta)
@@ -1440,25 +1704,21 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
 
   const canSave = form.cliente.trim().length > 0 && form.data.trim().length > 0;
 
-  const handleSave = () => {
-    if (!canSave) return;
-    onSave({
-      lavorazioneId,
-      lavorazioneLabel: lav.label,
-      cliente: form.cliente,
-      vino: full
-        ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
-        : form.vino,
-      emailAggiuntiva,
-      ora: new Date().toLocaleTimeString("it-IT", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    });
+  const handleSave = async () => {
+    if (!canSave || saving) return;
+    setSaveError("");
 
-    // Genera il PDF del rapportino, lo scarica e apre l'email pronta
+    // Il rapportino viene considerato "salvato" solo se arriva nell'archivio
+    // condiviso (Supabase). Per questo il PDF e la mail vengono preparati
+    // dopo, non prima: se non c'è connessione non deve succedere che il PDF
+    // parta/arrivi al cliente mentre l'intervento non resta in archivio.
+    const vinoRiepilogo = full
+      ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
+      : form.vino;
+
+    let doc, filename;
     try {
-      const { doc, filename } = generaRapportinoPDF({
+      const generato = generaRapportinoPDF({
         lavorazioneId,
         lavorazioneLabel: lav.label,
         cliente: form.cliente,
@@ -1478,59 +1738,63 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         nomeCliente,
         emailAggiuntiva,
       });
-      doc.save(filename);
-      setTimeout(() => {
-        apriEmailConDestinatari({
-          filename,
-          cliente: form.cliente,
-          lavorazioneLabel: lav.label,
-          emailAggiuntiva,
-        });
-      }, 600);
-
-      // Manda una copia al database condiviso (archivio), se c'è connessione.
-      // Riprova automaticamente in caso di errore di rete (bug noto di
-      // Safari sulle app installate su iPhone). Se fallisce comunque, il
-      // PDF resta scaricato sul telefono: non blocchiamo il salvataggio.
-      window.alert("ARCHIVIO — avvio tentativo di salvataggio…");
-      try {
-        const pdfBase64 = doc.output("datauristring").split(",")[1];
-        const vinoRiepilogo = full
-          ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
-          : form.vino;
-        // TEST DIAGNOSTICO TEMPORANEO: PDF escluso apposta, per capire se è
-        // il peso dei dati a bloccare il salvataggio su Safari/iPhone.
-        conRiprovaDiRete(async () => {
-          const { error } = await supabase.from("rapportini").insert({
-            lavorazione: lav.label,
-            cliente: form.cliente,
-            vino: vinoRiepilogo,
-            operatore: nomeOperatore,
-            dettagli: `Data intervento: ${form.data || "—"} [TEST senza PDF]`,
-          });
-          if (error) throw error;
-        })
-          .then(() => {
-            window.alert("ARCHIVIO — salvato correttamente ✓");
-          })
-          .catch((e) => {
-            console.error("Errore salvataggio archivio (dopo i tentativi):", e);
-            window.alert(
-              "ARCHIVIO — errore dopo i tentativi:\n" +
-                "message: " + (e.message || "—") + "\n" +
-                "code: " + (e.code || "—") + "\n" +
-                "details: " + (e.details || "—") + "\n" +
-                "hint: " + (e.hint || "—")
-            );
-          });
-      } catch (e) {
-        console.error("Errore preparazione dati per l'archivio:", e);
-        window.alert("ARCHIVIO — errore prima dell'invio:\n" + e.message);
-      }
+      doc = generato.doc;
+      filename = generato.filename;
     } catch (e) {
       console.error("Errore nella generazione del PDF:", e);
+      setSaveError(
+        "Non sono riuscito a generare il PDF. Controlla i dati inseriti e riprova."
+      );
+      return;
     }
 
+    setSaving(true);
+    try {
+      const pdfBase64 = doc.output("datauristring").split(",")[1];
+      await conRiprovaDiRete(async () => {
+        const { error } = await supabase.from("rapportini").insert({
+          lavorazione: lav.label,
+          cliente: form.cliente,
+          vino: vinoRiepilogo,
+          operatore: nomeOperatore,
+          dettagli: `Data intervento: ${form.data || "—"}`,
+          pdf_base64: pdfBase64,
+        });
+        if (error) throw error;
+      });
+    } catch (e) {
+      console.error("Errore salvataggio archivio (dopo i tentativi):", e);
+      setSaving(false);
+      setSaveError(
+        "Nessuna connessione di rete: l'intervento NON è stato salvato in archivio e il PDF non è stato inviato. La bozza resta qui — riprova a premere \"Salva intervento\" quando hai connessione."
+      );
+      return;
+    }
+
+    // Salvato in archivio: ora sì, scarica il PDF e apri l'email pronta.
+    onSave({
+      lavorazioneId,
+      lavorazioneLabel: lav.label,
+      cliente: form.cliente,
+      vino: vinoRiepilogo,
+      emailAggiuntiva,
+      ora: new Date().toLocaleTimeString("it-IT", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    });
+
+    doc.save(filename);
+    setTimeout(() => {
+      apriEmailConDestinatari({
+        filename,
+        cliente: form.cliente,
+        lavorazioneLabel: lav.label,
+        emailAggiuntiva,
+      });
+    }, 600);
+
+    setSaving(false);
     clearDraft(lavorazioneId);
     setSaved(true);
     setTimeout(() => onBack(), 1400);
@@ -1603,6 +1867,27 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
 
         {full ? (
           <>
+            {lavorazioneId === "confezionamento" && (
+              <TabellaControlliConforme
+                titolo="Controlli pre-operativi impianto/attrezzatura"
+                righe={[
+                  { key: "verificaPulizia", label: "Verifica pulizia" },
+                  {
+                    key: "assenzaPartiDanneggiate",
+                    label: "Assenza parti danneggiate",
+                  },
+                  { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
+                  { key: "conformitaCapsule", label: "Conformità capsule" },
+                  {
+                    key: "conformitaEtichette",
+                    label: "Conformità etichette",
+                  },
+                ]}
+                valori={form.controlliPreOperativi}
+                onChange={(v) => set({ controlliPreOperativi: v })}
+              />
+            )}
+
             {form.prodotti.map((p, idx) => (
               <div key={idx} style={styles.prodottoBlock}>
                 <div style={styles.prodottoHeader}>
@@ -1855,6 +2140,26 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
+                {lavorazioneId === "confezionamento" && (
+                  <TabellaControlliConforme
+                    titolo="Controlli di processo"
+                    righe={[
+                      {
+                        key: "posizionamentoCapsule",
+                        label: "Posizionamento capsule",
+                      },
+                      {
+                        key: "posizionamentoEtichette",
+                        label: "Posizionamento etichette",
+                      },
+                      { key: "timbraturaLotto", label: "Timbratura lotto" },
+                      { key: "imballaggio", label: "Imballaggio" },
+                    ]}
+                    valori={p.controlliProcesso}
+                    onChange={(v) => setProdotto(idx, { controlliProcesso: v })}
+                  />
+                )}
+
                 <ControlTable
                   rows={p.controlli}
                   onChange={(controlli) => setProdotto(idx, { controlli })}
@@ -2047,16 +2352,25 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
               cliente e data sono necessari per salvare
             </span>
           )}
+          {saveError && (
+            <span style={{ ...styles.saveHint, color: "#D98F7A" }}>
+              {saveError}
+            </span>
+          )}
           <button
             onClick={handleSave}
-            disabled={!canSave}
+            disabled={!canSave || saving}
             style={{
               ...styles.saveBtn,
-              opacity: canSave ? 1 : 0.4,
-              cursor: canSave ? "pointer" : "not-allowed",
+              opacity: canSave && !saving ? 1 : 0.4,
+              cursor: canSave && !saving ? "pointer" : "not-allowed",
             }}
           >
-            {saved ? "Intervento salvato ✓" : "Salva intervento"}
+            {saved
+              ? "Intervento salvato ✓"
+              : saving
+              ? "Salvataggio in corso…"
+              : "Salva intervento"}
           </button>
         </div>
       </div>
@@ -2111,9 +2425,12 @@ export default function App() {
           operatore={operatore}
           onCambiaOperatore={cambiaOperatore}
           onArchivio={() => setView("archivio")}
+          onCaricaManuale={() => setView("carica-manuale")}
         />
       ) : view === "archivio" ? (
         <ArchivioRapportini onBack={() => setView("home")} />
+      ) : view === "carica-manuale" ? (
+        <CaricaManuale onBack={() => setView("home")} />
       ) : (
         <InterventoForm
           lavorazioneId={view}
