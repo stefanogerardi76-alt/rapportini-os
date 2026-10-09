@@ -973,10 +973,10 @@ function TabellaControlliConforme({ titolo, righe, valori, onChange }) {
           ))}
         </div>
         {righe.map((r) => (
-          <div key={r.key} style={styles.controlRow}>
+          <div key={r.key} style={styles.conformeRow}>
             <span style={{ ...styles.qtaLabel, flex: 1 }}>{r.label}</span>
             {OPZIONI_CONFORME.map((o) => (
-              <label key={o.value} style={{ ...styles.checkCell, width: 62 }}>
+              <label key={o.value} style={{ ...styles.checkCell, width: 62, flex: "none" }}>
                 <input
                   type="checkbox"
                   checked={valori[r.key] === o.value}
@@ -1009,6 +1009,16 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
       ).length
     : rows.filter((r) => r.livello !== "").length;
 
+  // Stessa griglia per intestazione e righe: così ogni campo resta
+  // esattamente sotto la sua colonna, su qualsiasi larghezza di schermo.
+  const griglia = confezionamento
+    ? "48px repeat(7, minmax(0, 1fr))"
+    : semplice
+    ? "48px repeat(3, minmax(0, 1fr)) 64px 64px minmax(0, 1fr)"
+    : "48px repeat(4, minmax(0, 1fr)) repeat(4, 60px)";
+  const head = { ...styles.controlTableHead, gridTemplateColumns: griglia };
+  const riga = { ...riga, gridTemplateColumns: griglia };
+
   return (
     <div style={styles.controlBlock}>
       <div style={styles.controlHeaderRow}>
@@ -1025,21 +1035,21 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
 
       {confezionamento ? (
         <div style={styles.controlTableWrap}>
-          <div style={styles.controlTableHead}>
-            <span style={{ width: 64 }}>ora</span>
-            <span style={{ width: 76 }}>bottiglie prodotte</span>
-            <span style={{ flex: 1, textAlign: "center" }}>capsula</span>
-            <span style={{ flex: 1, textAlign: "center" }}>fronte</span>
-            <span style={{ flex: 1, textAlign: "center" }}>retro</span>
-            <span style={{ flex: 1, textAlign: "center" }}>collare</span>
-            <span style={{ flex: 1, textAlign: "center" }}>fascetta</span>
-            <span style={{ flex: 1, textAlign: "center" }}>lotto</span>
+          <div style={head}>
+            <span style={styles.headCell}>ora</span>
+            <span style={styles.headCell}>bottiglie prodotte</span>
+            <span style={styles.headCellCenter}>capsula</span>
+            <span style={styles.headCellCenter}>fronte</span>
+            <span style={styles.headCellCenter}>retro</span>
+            <span style={styles.headCellCenter}>collare</span>
+            <span style={styles.headCellCenter}>fascetta</span>
+            <span style={styles.headCellCenter}>lotto</span>
           </div>
           {rows.map((r, i) => (
             <div
               key={r.ora}
               style={{
-                ...styles.controlRow,
+                ...riga,
                 background:
                   r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
                     ? "rgba(201,162,39,0.06)"
@@ -1055,11 +1065,11 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) =>
                   update(i, { bottiglieProdotte: e.target.value })
                 }
-                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+                style={styles.controlInput}
               />
               {["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map(
                 (campo) => (
-                  <label key={campo} style={{ ...styles.checkCell, flex: 1 }}>
+                  <label key={campo} style={styles.checkCell}>
                     <input
                       type="checkbox"
                       checked={r[campo]}
@@ -1077,20 +1087,20 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
         // dosaggio liqueur, inserimento tappo, integrità tappo (flag),
         // posizionamento gabbietta (flag), livello riempimento.
         <div style={styles.controlTableWrap}>
-          <div style={styles.controlTableHead}>
-            <span style={{ width: 64 }}>ora</span>
-            <span style={{ width: 76 }}>bottiglie prodotte</span>
-            <span style={{ flex: 1 }}>dosaggio liqueur (ml)</span>
-            <span style={{ flex: 1 }}>inserimento tappo (mm)</span>
-            <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
-            <span style={{ width: 76, textAlign: "center" }}>posiz. gabbietta</span>
-            <span style={{ flex: 1 }}>livello riempimento (mm)</span>
+          <div style={head}>
+            <span style={styles.headCell}>ora</span>
+            <span style={styles.headCell}>bottiglie prodotte</span>
+            <span style={styles.headCell}>dosaggio liqueur (ml)</span>
+            <span style={styles.headCell}>inserimento tappo (mm)</span>
+            <span style={styles.headCellCenter}>integr. tappo</span>
+            <span style={styles.headCellCenter}>posiz. gabbietta</span>
+            <span style={styles.headCell}>livello riempimento (mm)</span>
           </div>
           {rows.map((r, i) => (
             <div
               key={r.ora}
               style={{
-                ...styles.controlRow,
+                ...riga,
                 background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
               }}
             >
@@ -1103,7 +1113,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) =>
                   update(i, { bottiglieProdotte: e.target.value })
                 }
-                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+                style={styles.controlInput}
               />
               <input
                 type="number"
@@ -1154,16 +1164,16 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
         </div>
       ) : (
         <div style={styles.controlTableWrap}>
-          <div style={styles.controlTableHead}>
-            <span style={{ width: 64 }}>ora</span>
-            <span style={{ width: 76 }}>bottiglie prodotte</span>
-            <span style={{ flex: 1 }}>livello (mm)</span>
-            <span style={{ flex: 1 }}>dosaggio (ml)</span>
-            <span style={{ flex: 1 }}>inser. tappo (mm)</span>
-            <span style={{ width: 76, textAlign: "center" }}>bidule</span>
-            <span style={{ width: 76, textAlign: "center" }}>tappo</span>
-            <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
-            <span style={{ width: 76, textAlign: "center" }}>
+          <div style={head}>
+            <span style={styles.headCell}>ora</span>
+            <span style={styles.headCell}>bottiglie prodotte</span>
+            <span style={styles.headCell}>livello (mm)</span>
+            <span style={styles.headCell}>dosaggio (ml)</span>
+            <span style={styles.headCell}>inser. tappo (mm)</span>
+            <span style={styles.headCellCenter}>bidule</span>
+            <span style={styles.headCellCenter}>tappo</span>
+            <span style={styles.headCellCenter}>integr. tappo</span>
+            <span style={styles.headCellCenter}>
               {tiraggio ? "posiz. bidule" : "gabbietta"}
             </span>
           </div>
@@ -1171,7 +1181,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
             <div
               key={r.ora}
               style={{
-                ...styles.controlRow,
+                ...riga,
                 background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
               }}
             >
@@ -1184,7 +1194,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) =>
                   update(i, { bottiglieProdotte: e.target.value })
                 }
-                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+                style={styles.controlInput}
               />
               <input
                 type="number"
@@ -3063,19 +3073,41 @@ const styles = {
     border: `1px solid ${COLORS.border}`,
   },
   controlTableHead: {
-    display: "flex",
-    gap: 8,
-    padding: "7px 10px",
-    fontSize: 10.5,
+    display: "grid",
+    columnGap: 6,
+    alignItems: "end",
+    padding: "7px 8px",
+    fontSize: 10,
     textTransform: "uppercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
+    lineHeight: 1.25,
     color: COLORS.textMuted,
     borderBottom: `1px solid ${COLORS.border}`,
     position: "sticky",
     top: 0,
+    zIndex: 1,
     background: COLORS.surface,
   },
+  headCell: {
+    minWidth: 0,
+    overflowWrap: "break-word",
+    hyphens: "auto",
+  },
+  headCellCenter: {
+    minWidth: 0,
+    overflowWrap: "break-word",
+    hyphens: "auto",
+    textAlign: "center",
+  },
   controlRow: {
+    display: "grid",
+    columnGap: 6,
+    padding: "5px 8px",
+    alignItems: "center",
+    borderBottom: `1px solid rgba(237,232,221,0.06)`,
+  },
+  // Righe della tabella Conforme/Non conforme (layout flex, invariato)
+  conformeRow: {
     display: "flex",
     gap: 8,
     padding: "5px 10px",
@@ -3083,23 +3115,26 @@ const styles = {
     borderBottom: `1px solid rgba(237,232,221,0.06)`,
   },
   controlTime: {
-    width: 64,
+    minWidth: 0,
     fontFamily: FONT_MONO,
     fontSize: 12,
     color: COLORS.textMuted,
   },
   controlInput: {
-    flex: 1,
+    width: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
     background: "transparent",
     border: "none",
     borderBottom: `1px solid ${COLORS.border}`,
+    borderRadius: 0,
     color: COLORS.text,
     fontSize: 13,
     padding: "3px 2px",
     outline: "none",
   },
   checkCell: {
-    width: 76,
+    minWidth: 0,
     display: "flex",
     justifyContent: "center",
     cursor: "pointer",
