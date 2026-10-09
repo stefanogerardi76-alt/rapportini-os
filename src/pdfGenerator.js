@@ -335,10 +335,7 @@ export function generaRapportinoPDF({
       const isConfezionamento = lavorazioneLabel === "Confezionamento";
       // Tiraggio, Imbottigliamento e Travaso usano la tabella senza le
       // colonne "bidule"/"chiusura" (solo Sboccatura le mantiene, come era).
-      const isSemplice =
-        lavorazioneLabel === "Tiraggio" ||
-        lavorazioneLabel === "Imbottigliamento" ||
-        lavorazioneLabel === "Travaso";
+      const isSemplice = lavorazioneLabel === "Sboccatura";
 
       const righeCompilate = (p.controlli || []).filter((r) =>
         isConfezionamento

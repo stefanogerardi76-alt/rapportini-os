@@ -2356,11 +2356,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   onChange={(controlli) => setProdotto(idx, { controlli })}
                   tiraggio={lavorazioneId === "tiraggio"}
                   confezionamento={lavorazioneId === "confezionamento"}
-                  semplice={
-                    lavorazioneId === "tiraggio" ||
-                    lavorazioneId === "imbottigliamento" ||
-                    lavorazioneId === "travaso"
-                  }
+                  semplice={lavorazioneId === "sboccatura"}
                 />
               </div>
             ))}
