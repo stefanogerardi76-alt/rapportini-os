@@ -26,6 +26,32 @@ function titolo(doc, y, testo) {
   return y + 8;
 }
 
+const ETICHETTE_CONFORME = {
+  conforme: "Conforme",
+  nonConforme: "Non conforme",
+  nApplic: "N.Applic.",
+};
+
+// Stampa in forma compatta l'esito di una tabella "Conforme/Non conforme/
+// N.Applic." (solo le righe compilate, come per la tabella controlli).
+function stampaControlliConforme(doc, y, titoloBlocco, righeLabel, valori) {
+  const compilate = righeLabel.filter((r) => valori[r.key]);
+  if (!compilate.length) return y;
+  y = checkNuovaPagina(doc, y + 2);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9.5);
+  doc.text(titoloBlocco, 14, y);
+  y += 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  compilate.forEach((r) => {
+    y = checkNuovaPagina(doc, y);
+    doc.text(`${r.label}: ${ETICHETTE_CONFORME[valori[r.key]]}`, 14, y);
+    y += 4.5;
+  });
+  return y + 2;
+}
+
 function checkNuovaPagina(doc, y, margine = 270) {
   if (y > margine) {
     doc.addPage();
@@ -170,6 +196,25 @@ export function generaRapportinoPDF({
   }
   y += 2;
 
+  if (lavorazioneLabel === "Confezionamento" && controlliPreOperativi) {
+    y = stampaControlliConforme(
+      doc,
+      y,
+      "Controlli pre-operativi impianto/attrezzatura",
+      [
+        { key: "verificaPulizia", label: "Verifica pulizia" },
+        {
+          key: "assenzaPartiDanneggiate",
+          label: "Assenza parti danneggiate",
+        },
+        { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
+        { key: "conformitaCapsule", label: "Conformità capsule" },
+        { key: "conformitaEtichette", label: "Conformità etichette" },
+      ],
+      controlliPreOperativi
+    );
+  }
+
   if (prodotti && prodotti.length) {
     prodotti.forEach((p, idx) => {
       y = checkNuovaPagina(doc, y);
@@ -229,8 +274,15 @@ export function generaRapportinoPDF({
 
       const righeCompilate = (p.controlli || []).filter((r) =>
         isConfezionamento
-          ? r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
-          : r.livello ||
+          ? r.bottiglieProdotte ||
+            r.capsula ||
+            r.fronte ||
+            r.retro ||
+            r.collare ||
+            r.fascetta ||
+            r.lotto
+          : r.bottiglieProdotte ||
+            r.livello ||
             r.dosaggio ||
             r.inserimentoTappo ||
             r.integritaTappo ||
@@ -247,9 +299,10 @@ export function generaRapportinoPDF({
         y += 5;
 
         const headers = isConfezionamento
-          ? ["Ora", "Caps.", "Fronte", "Retro", "Collare", "Fasc.", "Lotto"]
+          ? ["Ora", "Bott.prod.", "Caps.", "Fronte", "Retro", "Collare", "Fasc.", "Lotto"]
           : [
               "Ora",
+              "Bott.prod.",
               "Liv.",
               "Dos.",
               "Ins.tappo",
@@ -259,8 +312,8 @@ export function generaRapportinoPDF({
               "Chius.",
             ];
         const colX = isConfezionamento
-          ? [14, 32, 56, 82, 108, 138, 164]
-          : [14, 32, 46, 60, 82, 100, 118, 138];
+          ? [14, 30, 52, 76, 100, 124, 152, 176]
+          : [14, 30, 46, 60, 74, 96, 114, 132, 150];
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
         headers.forEach((h, i) => doc.text(h, colX[i], y));
@@ -269,25 +322,29 @@ export function generaRapportinoPDF({
 
         righeCompilate.forEach((r) => {
           y = checkNuovaPagina(doc, y);
+          // Il font standard di jsPDF non ha il glifo "✓": con "X" il segno di
+          // spunta si vede sempre, su qualsiasi lettore PDF.
           const vals = isConfezionamento
             ? [
                 r.ora,
-                r.capsula ? "✓" : "",
-                r.fronte ? "✓" : "",
-                r.retro ? "✓" : "",
-                r.collare ? "✓" : "",
-                r.fascetta ? "✓" : "",
-                r.lotto ? "✓" : "",
+                r.bottiglieProdotte || "",
+                r.capsula ? "X" : "",
+                r.fronte ? "X" : "",
+                r.retro ? "X" : "",
+                r.collare ? "X" : "",
+                r.fascetta ? "X" : "",
+                r.lotto ? "X" : "",
               ]
             : [
                 r.ora,
+                r.bottiglieProdotte || "",
                 r.livello || "",
                 r.dosaggio || "",
                 r.inserimentoTappo || "",
-                r.integritaTappo ? "✓" : "",
-                r.posizionamentoGabbietta ? "✓" : "",
-                r.bidule ? "✓" : "",
-                r.chiusura ? "✓" : "",
+                r.integritaTappo ? "X" : "",
+                r.posizionamentoGabbietta ? "X" : "",
+                r.bidule ? "X" : "",
+                r.chiusura ? "X" : "",
               ];
           vals.forEach((v, i) => doc.text(String(v), colX[i], y));
           y += 4.5;
