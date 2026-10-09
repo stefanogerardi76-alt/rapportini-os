@@ -369,11 +369,11 @@ export function generaRapportinoPDF({
           ? [
               "Ora",
               "Bott.prod.",
-              "Liv.riemp.",
-              "Dos.",
-              "Ins.tappi",
+              "Dos.liq.",
+              "Ins.tappo",
               "Integr.",
-              lavorazioneLabel === "Tiraggio" ? "Pos.bid." : "Pos.gabb.",
+              "Pos.gabb.",
+              "Liv.riemp.",
             ]
           : [
               "Ora",
@@ -416,11 +416,11 @@ export function generaRapportinoPDF({
             ? [
                 r.ora,
                 r.bottiglieProdotte || "",
-                r.livello || "",
                 r.dosaggio || "",
                 r.inserimentoTappo || "",
                 r.integritaTappo ? "X" : "",
                 r.posizionamentoGabbietta ? "X" : "",
+                r.livello || "",
               ]
             : [
                 r.ora,

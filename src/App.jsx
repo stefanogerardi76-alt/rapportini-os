@@ -1072,27 +1072,99 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
             </div>
           ))}
         </div>
+      ) : semplice ? (
+        // Sboccatura: ordine esatto richiesto — ora, bottiglie prodotte,
+        // dosaggio liqueur, inserimento tappo, integrità tappo (flag),
+        // posizionamento gabbietta (flag), livello riempimento.
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
+            <span style={{ flex: 1 }}>dosaggio liqueur (ml)</span>
+            <span style={{ flex: 1 }}>inserimento tappo (mm)</span>
+            <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>posiz. gabbietta</span>
+            <span style={{ flex: 1 }}>livello riempimento (mm)</span>
+          </div>
+          {rows.map((r, i) => (
+            <div
+              key={r.ora}
+              style={{
+                ...styles.controlRow,
+                background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
+              }}
+            >
+              <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.bottiglieProdotte}
+                onChange={(e) =>
+                  update(i, { bottiglieProdotte: e.target.value })
+                }
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.dosaggio}
+                onChange={(e) => update(i, { dosaggio: e.target.value })}
+                style={styles.controlInput}
+              />
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.inserimentoTappo}
+                onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
+                style={styles.controlInput}
+              />
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.integritaTappo}
+                  onChange={(e) =>
+                    update(i, { integritaTappo: e.target.checked })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.posizionamentoGabbietta}
+                  onChange={(e) =>
+                    update(i, { posizionamentoGabbietta: e.target.checked })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.livello}
+                onChange={(e) => update(i, { livello: e.target.value })}
+                style={styles.controlInput}
+              />
+            </div>
+          ))}
+        </div>
       ) : (
         <div style={styles.controlTableWrap}>
           <div style={styles.controlTableHead}>
             <span style={{ width: 64 }}>ora</span>
             <span style={{ width: 76 }}>bottiglie prodotte</span>
-            <span style={{ flex: 1 }}>
-              {semplice ? "livello riempimento (mm)" : "livello (mm)"}
-            </span>
+            <span style={{ flex: 1 }}>livello (mm)</span>
             <span style={{ flex: 1 }}>dosaggio (ml)</span>
-            <span style={{ flex: 1 }}>
-              {semplice ? "inserimento tappi (mm)" : "inser. tappo (mm)"}
-            </span>
-            {!semplice && (
-              <>
-                <span style={{ width: 76, textAlign: "center" }}>bidule</span>
-                <span style={{ width: 76, textAlign: "center" }}>tappo</span>
-              </>
-            )}
+            <span style={{ flex: 1 }}>inser. tappo (mm)</span>
+            <span style={{ width: 76, textAlign: "center" }}>bidule</span>
+            <span style={{ width: 76, textAlign: "center" }}>tappo</span>
             <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
             <span style={{ width: 76, textAlign: "center" }}>
-              {tiraggio ? "posiz. bidule" : semplice ? "posiz. gabbietta" : "gabbietta"}
+              {tiraggio ? "posiz. bidule" : "gabbietta"}
             </span>
           </div>
           {rows.map((r, i) => (
@@ -1138,26 +1210,22 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
                 style={styles.controlInput}
               />
-              {!semplice && (
-                <>
-                  <label style={styles.checkCell}>
-                    <input
-                      type="checkbox"
-                      checked={r.bidule}
-                      onChange={(e) => update(i, { bidule: e.target.checked })}
-                      style={styles.checkbox}
-                    />
-                  </label>
-                  <label style={styles.checkCell}>
-                    <input
-                      type="checkbox"
-                      checked={r.chiusura}
-                      onChange={(e) => update(i, { chiusura: e.target.checked })}
-                      style={styles.checkbox}
-                    />
-                  </label>
-                </>
-              )}
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.bidule}
+                  onChange={(e) => update(i, { bidule: e.target.checked })}
+                  style={styles.checkbox}
+                />
+              </label>
+              <label style={styles.checkCell}>
+                <input
+                  type="checkbox"
+                  checked={r.chiusura}
+                  onChange={(e) => update(i, { chiusura: e.target.checked })}
+                  style={styles.checkbox}
+                />
+              </label>
               <label style={styles.checkCell}>
                 <input
                   type="checkbox"
