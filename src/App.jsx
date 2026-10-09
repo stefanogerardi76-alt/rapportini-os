@@ -742,8 +742,11 @@ function emptyFullForm() {
     // "Servizi accessori" — solo Sboccatura, 3 caselle indipendenti
     serviziAccessori: {
       filtrazioneLiqueur: false,
+      filtrazioneTipo: "",
+      filtrazioneLotto: "",
       jetting: false,
       fornituraMateriali: false,
+      fornituraMaterialiNote: "",
     },
     // "Controlli pre-operativi impianto/attrezzatura" — Confezionamento e
     // Sboccatura (righe diverse per lavorazione, vedi RIGHE_PRE_OPERATIVI)
@@ -1979,22 +1982,52 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         {lavorazioneId === "sboccatura" && (
           <div>
             <div style={styles.sectionLabel}>Servizi accessori</div>
-            <label style={styles.bioRow}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <label style={{ ...styles.bioRow, marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={form.serviziAccessori.filtrazioneLiqueur}
+                  onChange={(e) =>
+                    set({
+                      serviziAccessori: {
+                        ...form.serviziAccessori,
+                        filtrazioneLiqueur: e.target.checked,
+                      },
+                    })
+                  }
+                  style={styles.checkbox}
+                />
+                <span style={styles.bioText}>FILTRAZIONE LIQUEUR</span>
+              </label>
               <input
-                type="checkbox"
-                checked={form.serviziAccessori.filtrazioneLiqueur}
+                type="text"
+                style={{ ...styles.input, flex: 1, minWidth: 120 }}
+                placeholder="tipo di filtro"
+                value={form.serviziAccessori.filtrazioneTipo}
                 onChange={(e) =>
                   set({
                     serviziAccessori: {
                       ...form.serviziAccessori,
-                      filtrazioneLiqueur: e.target.checked,
+                      filtrazioneTipo: e.target.value,
                     },
                   })
                 }
-                style={styles.checkbox}
               />
-              <span style={styles.bioText}>FILTRAZIONE LIQUEUR</span>
-            </label>
+              <input
+                type="text"
+                style={{ ...styles.input, flex: 1, minWidth: 120 }}
+                placeholder="lotto filtro"
+                value={form.serviziAccessori.filtrazioneLotto}
+                onChange={(e) =>
+                  set({
+                    serviziAccessori: {
+                      ...form.serviziAccessori,
+                      filtrazioneLotto: e.target.value,
+                    },
+                  })
+                }
+              />
+            </div>
             <label style={styles.bioRow}>
               <input
                 type="checkbox"
@@ -2011,22 +2044,38 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
               />
               <span style={styles.bioText}>JETTING</span>
             </label>
-            <label style={styles.bioRow}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <label style={{ ...styles.bioRow, marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={form.serviziAccessori.fornituraMateriali}
+                  onChange={(e) =>
+                    set({
+                      serviziAccessori: {
+                        ...form.serviziAccessori,
+                        fornituraMateriali: e.target.checked,
+                      },
+                    })
+                  }
+                  style={styles.checkbox}
+                />
+                <span style={styles.bioText}>FORNITURA MATERIALI</span>
+              </label>
               <input
-                type="checkbox"
-                checked={form.serviziAccessori.fornituraMateriali}
+                type="text"
+                style={{ ...styles.input, flex: 1, minWidth: 140 }}
+                placeholder="note"
+                value={form.serviziAccessori.fornituraMaterialiNote}
                 onChange={(e) =>
                   set({
                     serviziAccessori: {
                       ...form.serviziAccessori,
-                      fornituraMateriali: e.target.checked,
+                      fornituraMaterialiNote: e.target.value,
                     },
                   })
                 }
-                style={styles.checkbox}
               />
-              <span style={styles.bioText}>FORNITURA MATERIALI</span>
-            </label>
+            </div>
           </div>
         )}
 

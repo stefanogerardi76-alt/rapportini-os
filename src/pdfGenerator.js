@@ -232,9 +232,24 @@ export function generaRapportinoPDF({
   }
   if (serviziAccessori) {
     const servizi = [
-      serviziAccessori.filtrazioneLiqueur && "Filtrazione liqueur",
+      serviziAccessori.filtrazioneLiqueur &&
+        [
+          "Filtrazione liqueur",
+          serviziAccessori.filtrazioneTipo &&
+            `tipo ${serviziAccessori.filtrazioneTipo}`,
+          serviziAccessori.filtrazioneLotto &&
+            `lotto ${serviziAccessori.filtrazioneLotto}`,
+        ]
+          .filter(Boolean)
+          .join(" — "),
       serviziAccessori.jetting && "Jetting",
-      serviziAccessori.fornituraMateriali && "Fornitura materiali",
+      serviziAccessori.fornituraMateriali &&
+        [
+          "Fornitura materiali",
+          serviziAccessori.fornituraMaterialiNote,
+        ]
+          .filter(Boolean)
+          .join(" — "),
     ].filter(Boolean);
     if (servizi.length) {
       y = riga(doc, y, "Servizi accessori", servizi.join(", "));
