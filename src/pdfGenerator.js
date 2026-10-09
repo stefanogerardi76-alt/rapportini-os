@@ -32,6 +32,40 @@ const ETICHETTE_CONFORME = {
   nApplic: "N.Applic.",
 };
 
+// Righe delle tabelle "Conforme/Non conforme/N.Applic.", diverse per
+// lavorazione — devono restare identiche a quelle di App.jsx.
+const RIGHE_PRE_OPERATIVI = {
+  Confezionamento: [
+    { key: "verificaPulizia", label: "Verifica pulizia" },
+    { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+    { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
+    { key: "conformitaCapsule", label: "Conformità capsule" },
+    { key: "conformitaEtichette", label: "Conformità etichette" },
+  ],
+  Sboccatura: [
+    { key: "verificaPulizia", label: "Verifica pulizia" },
+    { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+    { key: "sanificazioneConforme", label: "Sanificazione" },
+  ],
+};
+
+const RIGHE_CONTROLLI_PROCESSO = {
+  Confezionamento: [
+    { key: "posizionamentoCapsule", label: "Posizionamento capsule" },
+    { key: "posizionamentoEtichette", label: "Posizionamento etichette" },
+    { key: "timbraturaLotto", label: "Timbratura lotto" },
+    { key: "imballaggio", label: "Imballaggio" },
+  ],
+  Sboccatura: [
+    { key: "avvinamentoLiqueur", label: "Avvinamento liqueur" },
+    { key: "dosaggioLiqueur", label: "Dosaggio liqueur" },
+    { key: "livelloRiempimento", label: "Livello di riempimento" },
+    { key: "chiusuraTappi", label: "Chiusura tappi" },
+    { key: "chiusuraGabbiette", label: "Chiusura gabbiette" },
+    { key: "lavaggioBottiglie", label: "Lavaggio bottiglie" },
+  ],
+};
+
 // Stampa in forma compatta l'esito di una tabella "Conforme/Non conforme/
 // N.Applic." (solo le righe compilate, come per la tabella controlli).
 function stampaControlliConforme(doc, y, titoloBlocco, righeLabel, valori) {
@@ -161,6 +195,8 @@ export function generaRapportinoPDF({
   cliente,
   data,
   sanificazione,
+  serviziAccessori,
+  controlliPreOperativi,
   oraInizio,
   oraFine,
   oreViaggioAndata,
@@ -194,23 +230,24 @@ export function generaRapportinoPDF({
   if (lavorazioneLabel !== "Altri lavori") {
     y = riga(doc, y, "Sanificazione", sanificazione ? "Sì" : "No");
   }
+  if (serviziAccessori) {
+    const servizi = [
+      serviziAccessori.filtrazioneLiqueur && "Filtrazione liqueur",
+      serviziAccessori.jetting && "Jetting",
+      serviziAccessori.fornituraMateriali && "Fornitura materiali",
+    ].filter(Boolean);
+    if (servizi.length) {
+      y = riga(doc, y, "Servizi accessori", servizi.join(", "));
+    }
+  }
   y += 2;
 
-  if (lavorazioneLabel === "Confezionamento" && controlliPreOperativi) {
+  if (RIGHE_PRE_OPERATIVI[lavorazioneLabel] && controlliPreOperativi) {
     y = stampaControlliConforme(
       doc,
       y,
       "Controlli pre-operativi impianto/attrezzatura",
-      [
-        { key: "verificaPulizia", label: "Verifica pulizia" },
-        {
-          key: "assenzaPartiDanneggiate",
-          label: "Assenza parti danneggiate",
-        },
-        { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
-        { key: "conformitaCapsule", label: "Conformità capsule" },
-        { key: "conformitaEtichette", label: "Conformità etichette" },
-      ],
+      RIGHE_PRE_OPERATIVI[lavorazioneLabel],
       controlliPreOperativi
     );
   }
@@ -270,7 +307,23 @@ export function generaRapportinoPDF({
       }
       y = riga(doc, y, "Note", p.note);
 
+      if (RIGHE_CONTROLLI_PROCESSO[lavorazioneLabel] && p.controlliProcesso) {
+        y = stampaControlliConforme(
+          doc,
+          y,
+          "Controlli di processo",
+          RIGHE_CONTROLLI_PROCESSO[lavorazioneLabel],
+          p.controlliProcesso
+        );
+      }
+
       const isConfezionamento = lavorazioneLabel === "Confezionamento";
+      // Tiraggio, Imbottigliamento e Travaso usano la tabella senza le
+      // colonne "bidule"/"chiusura" (solo Sboccatura le mantiene, come era).
+      const isSemplice =
+        lavorazioneLabel === "Tiraggio" ||
+        lavorazioneLabel === "Imbottigliamento" ||
+        lavorazioneLabel === "Travaso";
 
       const righeCompilate = (p.controlli || []).filter((r) =>
         isConfezionamento
@@ -300,6 +353,16 @@ export function generaRapportinoPDF({
 
         const headers = isConfezionamento
           ? ["Ora", "Bott.prod.", "Caps.", "Fronte", "Retro", "Collare", "Fasc.", "Lotto"]
+          : isSemplice
+          ? [
+              "Ora",
+              "Bott.prod.",
+              "Liv.riemp.",
+              "Dos.",
+              "Ins.tappi",
+              "Integr.",
+              lavorazioneLabel === "Tiraggio" ? "Pos.bid." : "Pos.gabb.",
+            ]
           : [
               "Ora",
               "Bott.prod.",
@@ -307,12 +370,14 @@ export function generaRapportinoPDF({
               "Dos.",
               "Ins.tappo",
               "Integr.",
-              lavorazioneLabel === "Tiraggio" ? "Pos.bid." : "Gabb.",
+              "Gabb.",
               "Bidule",
               "Chius.",
             ];
         const colX = isConfezionamento
           ? [14, 30, 52, 76, 100, 124, 152, 176]
+          : isSemplice
+          ? [14, 30, 52, 80, 104, 132, 156]
           : [14, 30, 46, 60, 74, 96, 114, 132, 150];
         doc.setFontSize(8);
         doc.setFont("helvetica", "bold");
@@ -334,6 +399,16 @@ export function generaRapportinoPDF({
                 r.collare ? "X" : "",
                 r.fascetta ? "X" : "",
                 r.lotto ? "X" : "",
+              ]
+            : isSemplice
+            ? [
+                r.ora,
+                r.bottiglieProdotte || "",
+                r.livello || "",
+                r.dosaggio || "",
+                r.inserimentoTappo || "",
+                r.integritaTappo ? "X" : "",
+                r.posizionamentoGabbietta ? "X" : "",
               ]
             : [
                 r.ora,

@@ -717,12 +717,19 @@ function emptyProdotto() {
     incartonamentoTipo: "", // solo Confezionamento
     note: "",
     controlli: emptyControlRows(),
-    // "Controlli di processo" — solo Confezionamento, uno per ogni vino
+    // "Controlli di processo" — Confezionamento e Sboccatura, uno per ogni
+    // vino (righe diverse per lavorazione, vedi RIGHE_CONTROLLI_PROCESSO)
     controlliProcesso: {
       posizionamentoCapsule: "",
       posizionamentoEtichette: "",
       timbraturaLotto: "",
       imballaggio: "",
+      avvinamentoLiqueur: "",
+      dosaggioLiqueur: "",
+      livelloRiempimento: "",
+      chiusuraTappi: "",
+      chiusuraGabbiette: "",
+      lavaggioBottiglie: "",
     },
   };
 }
@@ -732,13 +739,21 @@ function emptyFullForm() {
     cliente: "",
     data: "",
     sanificazione: false,
-    // "Controlli pre-operativi impianto/attrezzatura" — solo Confezionamento
+    // "Servizi accessori" — solo Sboccatura, 3 caselle indipendenti
+    serviziAccessori: {
+      filtrazioneLiqueur: false,
+      jetting: false,
+      fornituraMateriali: false,
+    },
+    // "Controlli pre-operativi impianto/attrezzatura" — Confezionamento e
+    // Sboccatura (righe diverse per lavorazione, vedi RIGHE_PRE_OPERATIVI)
     controlliPreOperativi: {
       verificaPulizia: "",
       assenzaPartiDanneggiate: "",
       puliziaBottiglia: "",
       conformitaCapsule: "",
       conformitaEtichette: "",
+      sanificazioneConforme: "",
     },
     prodotti: [emptyProdotto()],
   };
@@ -769,6 +784,10 @@ function formConDefaultSicuri(formSalvato, full) {
     controlliPreOperativi: {
       ...base.controlliPreOperativi,
       ...(formSalvato.controlliPreOperativi || {}),
+    },
+    serviziAccessori: {
+      ...base.serviziAccessori,
+      ...(formSalvato.serviziAccessori || {}),
     },
     prodotti: prodottiSalvati.map((p) => {
       const pBase = emptyProdotto();
@@ -894,8 +913,43 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
 // ---------------------------------------------------------------------------
 // Tabella controlli — rotolo di rilevazioni ogni 15'
 // ---------------------------------------------------------------------------
+// Righe delle tabelle "Conforme / Non conforme / N.Applic.", diverse per
+// lavorazione (solo Confezionamento e Sboccatura le usano).
+const RIGHE_PRE_OPERATIVI = {
+  confezionamento: [
+    { key: "verificaPulizia", label: "Verifica pulizia" },
+    { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+    { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
+    { key: "conformitaCapsule", label: "Conformità capsule" },
+    { key: "conformitaEtichette", label: "Conformità etichette" },
+  ],
+  sboccatura: [
+    { key: "verificaPulizia", label: "Verifica pulizia" },
+    { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+    { key: "sanificazioneConforme", label: "Sanificazione" },
+  ],
+};
+
+const RIGHE_CONTROLLI_PROCESSO = {
+  confezionamento: [
+    { key: "posizionamentoCapsule", label: "Posizionamento capsule" },
+    { key: "posizionamentoEtichette", label: "Posizionamento etichette" },
+    { key: "timbraturaLotto", label: "Timbratura lotto" },
+    { key: "imballaggio", label: "Imballaggio" },
+  ],
+  sboccatura: [
+    { key: "avvinamentoLiqueur", label: "Avvinamento liqueur" },
+    { key: "dosaggioLiqueur", label: "Dosaggio liqueur" },
+    { key: "livelloRiempimento", label: "Livello di riempimento" },
+    { key: "chiusuraTappi", label: "Chiusura tappi" },
+    { key: "chiusuraGabbiette", label: "Chiusura gabbiette" },
+    { key: "lavaggioBottiglie", label: "Lavaggio bottiglie" },
+  ],
+};
+
+// ---------------------------------------------------------------------------
 // Tabella "Conforme / Non conforme / N.Applic." a scelta singola per riga.
-// Usata per i controlli pre-operativi e i controlli di processo (Confezionamento).
+// Usata per i controlli pre-operativi e i controlli di processo.
 const OPZIONI_CONFORME = [
   { value: "conforme", label: "Conforme" },
   { value: "nonConforme", label: "Non conforme" },
@@ -940,7 +994,7 @@ function TabellaControlliConforme({ titolo, righe, valori, onChange }) {
   );
 }
 
-function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
+function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
   const update = (idx, patch) => {
     const next = rows.slice();
     next[idx] = { ...next[idx], ...patch };
@@ -1020,14 +1074,22 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
           <div style={styles.controlTableHead}>
             <span style={{ width: 64 }}>ora</span>
             <span style={{ width: 76 }}>bottiglie prodotte</span>
-            <span style={{ flex: 1 }}>livello (mm)</span>
+            <span style={{ flex: 1 }}>
+              {semplice ? "livello riempimento (mm)" : "livello (mm)"}
+            </span>
             <span style={{ flex: 1 }}>dosaggio (ml)</span>
-            <span style={{ flex: 1 }}>inser. tappo (mm)</span>
-            <span style={{ width: 76, textAlign: "center" }}>bidule</span>
-            <span style={{ width: 76, textAlign: "center" }}>tappo</span>
+            <span style={{ flex: 1 }}>
+              {semplice ? "inserimento tappi (mm)" : "inser. tappo (mm)"}
+            </span>
+            {!semplice && (
+              <>
+                <span style={{ width: 76, textAlign: "center" }}>bidule</span>
+                <span style={{ width: 76, textAlign: "center" }}>tappo</span>
+              </>
+            )}
             <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
             <span style={{ width: 76, textAlign: "center" }}>
-              {tiraggio ? "posiz. bidule" : "gabbietta"}
+              {tiraggio ? "posiz. bidule" : semplice ? "posiz. gabbietta" : "gabbietta"}
             </span>
           </div>
           {rows.map((r, i) => (
@@ -1073,22 +1135,26 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
                 onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
                 style={styles.controlInput}
               />
-              <label style={styles.checkCell}>
-                <input
-                  type="checkbox"
-                  checked={r.bidule}
-                  onChange={(e) => update(i, { bidule: e.target.checked })}
-                  style={styles.checkbox}
-                />
-              </label>
-              <label style={styles.checkCell}>
-                <input
-                  type="checkbox"
-                  checked={r.chiusura}
-                  onChange={(e) => update(i, { chiusura: e.target.checked })}
-                  style={styles.checkbox}
-                />
-              </label>
+              {!semplice && (
+                <>
+                  <label style={styles.checkCell}>
+                    <input
+                      type="checkbox"
+                      checked={r.bidule}
+                      onChange={(e) => update(i, { bidule: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                  <label style={styles.checkCell}>
+                    <input
+                      type="checkbox"
+                      checked={r.chiusura}
+                      onChange={(e) => update(i, { chiusura: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                </>
+              )}
               <label style={styles.checkCell}>
                 <input
                   type="checkbox"
@@ -1767,6 +1833,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         cliente: form.cliente,
         data: form.data,
         sanificazione: form.sanificazione,
+        serviziAccessori: full ? form.serviziAccessori : null,
+        controlliPreOperativi: full ? form.controlliPreOperativi : null,
         oraInizio,
         oraFine,
         oreViaggioAndata,
@@ -1908,24 +1976,66 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </label>
         )}
 
+        {lavorazioneId === "sboccatura" && (
+          <div>
+            <div style={styles.sectionLabel}>Servizi accessori</div>
+            <label style={styles.bioRow}>
+              <input
+                type="checkbox"
+                checked={form.serviziAccessori.filtrazioneLiqueur}
+                onChange={(e) =>
+                  set({
+                    serviziAccessori: {
+                      ...form.serviziAccessori,
+                      filtrazioneLiqueur: e.target.checked,
+                    },
+                  })
+                }
+                style={styles.checkbox}
+              />
+              <span style={styles.bioText}>FILTRAZIONE LIQUEUR</span>
+            </label>
+            <label style={styles.bioRow}>
+              <input
+                type="checkbox"
+                checked={form.serviziAccessori.jetting}
+                onChange={(e) =>
+                  set({
+                    serviziAccessori: {
+                      ...form.serviziAccessori,
+                      jetting: e.target.checked,
+                    },
+                  })
+                }
+                style={styles.checkbox}
+              />
+              <span style={styles.bioText}>JETTING</span>
+            </label>
+            <label style={styles.bioRow}>
+              <input
+                type="checkbox"
+                checked={form.serviziAccessori.fornituraMateriali}
+                onChange={(e) =>
+                  set({
+                    serviziAccessori: {
+                      ...form.serviziAccessori,
+                      fornituraMateriali: e.target.checked,
+                    },
+                  })
+                }
+                style={styles.checkbox}
+              />
+              <span style={styles.bioText}>FORNITURA MATERIALI</span>
+            </label>
+          </div>
+        )}
+
         {full ? (
           <>
-            {lavorazioneId === "confezionamento" && (
+            {RIGHE_PRE_OPERATIVI[lavorazioneId] && (
               <TabellaControlliConforme
                 titolo="Controlli pre-operativi impianto/attrezzatura"
-                righe={[
-                  { key: "verificaPulizia", label: "Verifica pulizia" },
-                  {
-                    key: "assenzaPartiDanneggiate",
-                    label: "Assenza parti danneggiate",
-                  },
-                  { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
-                  { key: "conformitaCapsule", label: "Conformità capsule" },
-                  {
-                    key: "conformitaEtichette",
-                    label: "Conformità etichette",
-                  },
-                ]}
+                righe={RIGHE_PRE_OPERATIVI[lavorazioneId]}
                 valori={form.controlliPreOperativi}
                 onChange={(v) => set({ controlliPreOperativi: v })}
               />
@@ -2183,21 +2293,10 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
-                {lavorazioneId === "confezionamento" && (
+                {RIGHE_CONTROLLI_PROCESSO[lavorazioneId] && (
                   <TabellaControlliConforme
                     titolo="Controlli di processo"
-                    righe={[
-                      {
-                        key: "posizionamentoCapsule",
-                        label: "Posizionamento capsule",
-                      },
-                      {
-                        key: "posizionamentoEtichette",
-                        label: "Posizionamento etichette",
-                      },
-                      { key: "timbraturaLotto", label: "Timbratura lotto" },
-                      { key: "imballaggio", label: "Imballaggio" },
-                    ]}
+                    righe={RIGHE_CONTROLLI_PROCESSO[lavorazioneId]}
                     valori={p.controlliProcesso}
                     onChange={(v) => setProdotto(idx, { controlliProcesso: v })}
                   />
@@ -2208,6 +2307,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   onChange={(controlli) => setProdotto(idx, { controlli })}
                   tiraggio={lavorazioneId === "tiraggio"}
                   confezionamento={lavorazioneId === "confezionamento"}
+                  semplice={
+                    lavorazioneId === "tiraggio" ||
+                    lavorazioneId === "imbottigliamento" ||
+                    lavorazioneId === "travaso"
+                  }
                 />
               </div>
             ))}
