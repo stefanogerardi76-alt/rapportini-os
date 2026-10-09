@@ -4,7 +4,7 @@ import { generaRapportinoPDF, apriEmailConDestinatari } from "./pdfGenerator";
 import { supabase } from "./supabaseClient";
 
 // Amministratori — vedono il pulsante "Archivio rapportini" in home
-const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović"];
+const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović", "Raffaele Santini"];
 
 // Su iPhone, quando l'app è installata sulla schermata Home, Safari a volte
 // blocca in modo casuale le richieste di rete verso siti esterni (errore
@@ -40,6 +40,7 @@ const OPERATORI = [
   { nome: "Valentina Erović", pin: "1234" },
   { nome: "Marco Santillo", pin: "1310" },
   { nome: "Giacomo Savardi", pin: "1205" },
+  { nome: "Raffaele Santini", pin: "2612" },
 ];
 
 const CLIENTI = [
