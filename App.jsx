@@ -675,6 +675,7 @@ const CONTROL_SLOTS = buildControlSlots();
 function emptyControlRows() {
   return CONTROL_SLOTS.map((t) => ({
     ora: t,
+    bottiglieProdotte: "",
     livello: "",
     dosaggio: "",
     inserimentoTappo: "",
@@ -715,6 +716,13 @@ function emptyProdotto() {
     incartonamentoTipo: "", // solo Confezionamento
     note: "",
     controlli: emptyControlRows(),
+    // "Controlli di processo" — solo Confezionamento, uno per ogni vino
+    controlliProcesso: {
+      posizionamentoCapsule: "",
+      posizionamentoEtichette: "",
+      timbraturaLotto: "",
+      imballaggio: "",
+    },
   };
 }
 
@@ -722,6 +730,15 @@ function emptyFullForm() {
   return {
     cliente: "",
     data: "",
+    sanificazione: false,
+    // "Controlli pre-operativi impianto/attrezzatura" — solo Confezionamento
+    controlliPreOperativi: {
+      verificaPulizia: "",
+      assenzaPartiDanneggiate: "",
+      puliziaBottiglia: "",
+      conformitaCapsule: "",
+      conformitaEtichette: "",
+    },
     prodotti: [emptyProdotto()],
   };
 }
@@ -834,6 +851,52 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
 // ---------------------------------------------------------------------------
 // Tabella controlli — rotolo di rilevazioni ogni 15'
 // ---------------------------------------------------------------------------
+// Tabella "Conforme / Non conforme / N.Applic." a scelta singola per riga.
+// Usata per i controlli pre-operativi e i controlli di processo (Confezionamento).
+const OPZIONI_CONFORME = [
+  { value: "conforme", label: "Conforme" },
+  { value: "nonConforme", label: "Non conforme" },
+  { value: "nApplic", label: "N.Applic." },
+];
+
+function TabellaControlliConforme({ titolo, righe, valori, onChange }) {
+  return (
+    <div style={styles.qtaBlock}>
+      <div style={styles.sectionLabel}>{titolo}</div>
+      <div style={styles.qtaTable}>
+        <div style={styles.qtaHead}>
+          <span style={{ flex: 1 }}>tipo controllo</span>
+          {OPZIONI_CONFORME.map((o) => (
+            <span key={o.value} style={styles.qtaColHead}>
+              {o.label}
+            </span>
+          ))}
+        </div>
+        {righe.map((r) => (
+          <div key={r.key} style={styles.controlRow}>
+            <span style={{ ...styles.qtaLabel, flex: 1 }}>{r.label}</span>
+            {OPZIONI_CONFORME.map((o) => (
+              <label key={o.value} style={{ ...styles.checkCell, width: 62 }}>
+                <input
+                  type="checkbox"
+                  checked={valori[r.key] === o.value}
+                  onChange={() =>
+                    onChange({
+                      ...valori,
+                      [r.key]: valori[r.key] === o.value ? "" : o.value,
+                    })
+                  }
+                  style={styles.checkbox}
+                />
+              </label>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
   const update = (idx, patch) => {
     const next = rows.slice();
@@ -864,6 +927,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
         <div style={styles.controlTableWrap}>
           <div style={styles.controlTableHead}>
             <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
             <span style={{ flex: 1, textAlign: "center" }}>capsula</span>
             <span style={{ flex: 1, textAlign: "center" }}>fronte</span>
             <span style={{ flex: 1, textAlign: "center" }}>retro</span>
@@ -883,6 +947,16 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
               }}
             >
               <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.bottiglieProdotte}
+                onChange={(e) =>
+                  update(i, { bottiglieProdotte: e.target.value })
+                }
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+              />
               {["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map(
                 (campo) => (
                   <label key={campo} style={{ ...styles.checkCell, flex: 1 }}>
@@ -902,6 +976,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
         <div style={styles.controlTableWrap}>
           <div style={styles.controlTableHead}>
             <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
             <span style={{ flex: 1 }}>livello (mm)</span>
             <span style={{ flex: 1 }}>dosaggio (ml)</span>
             <span style={{ flex: 1 }}>inser. tappo (mm)</span>
@@ -921,6 +996,16 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento }) {
               }}
             >
               <span style={styles.controlTime}>{r.ora}</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                placeholder="—"
+                value={r.bottiglieProdotte}
+                onChange={(e) =>
+                  update(i, { bottiglieProdotte: e.target.value })
+                }
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
+              />
               <input
                 type="number"
                 inputMode="numeric"
@@ -1122,6 +1207,28 @@ function ArchivioRapportini({ onBack }) {
 
 function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
   const isAdmin = AMMINISTRATORI.includes(operatore);
+  const [conteggioArchivio, setConteggioArchivio] = useState(null);
+
+  useEffect(() => {
+    let annullato = false;
+    conRiprovaDiRete(async () => {
+      const { count, error } = await supabase
+        .from("rapportini")
+        .select("*", { count: "exact", head: true });
+      if (error) throw error;
+      return count;
+    })
+      .then((count) => {
+        if (!annullato) setConteggioArchivio(count);
+      })
+      .catch((e) => {
+        console.error("Errore conteggio archivio:", e);
+      });
+    return () => {
+      annullato = true;
+    };
+  }, []);
+
   return (
     <div style={styles.homeWrap}>
       <header style={styles.homeHeader}>
@@ -1148,6 +1255,12 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio }) {
           </div>
         </div>
       </header>
+
+      {conteggioArchivio !== null && (
+        <div style={styles.contatoreArchivio}>
+          Rapportini archiviati: {conteggioArchivio}
+        </div>
+      )}
 
       {isAdmin && (
         <button onClick={onArchivio} style={styles.archivioBtn}>
@@ -1339,7 +1452,20 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const [emailAggiuntiva, setEmailAggiuntiva] = useState(
     bozzaIniziale?.emailAggiuntiva || ""
   );
+  const [oraInizio, setOraInizio] = useState(bozzaIniziale?.oraInizio || "");
+  const [oraFine, setOraFine] = useState(bozzaIniziale?.oraFine || "");
+  const [oreViaggioAndata, setOreViaggioAndata] = useState(
+    bozzaIniziale?.oreViaggioAndata || ""
+  );
+  const [oreViaggioRitorno, setOreViaggioRitorno] = useState(
+    bozzaIniziale?.oreViaggioRitorno || ""
+  );
+  const [altriOperatori, setAltriOperatori] = useState(
+    bozzaIniziale?.altriOperatori || ""
+  );
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [bozzaRipristinata] = useState(!!bozzaIniziale);
 
   // Salva automaticamente la bozza a ogni modifica (nessuna connessione richiesta)
@@ -1351,6 +1477,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       nomeOperatore,
       nomeCliente,
       emailAggiuntiva,
+      oraInizio,
+      oraFine,
+      oreViaggioAndata,
+      oreViaggioRitorno,
+      altriOperatori,
     });
   }, [
     lavorazioneId,
@@ -1360,6 +1491,11 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     nomeOperatore,
     nomeCliente,
     emailAggiuntiva,
+    oraInizio,
+    oraFine,
+    oreViaggioAndata,
+    oreViaggioRitorno,
+    altriOperatori,
   ]);
 
   const set = useCallback((patch) => setForm((f) => ({ ...f, ...patch })), []);
@@ -1390,28 +1526,31 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
 
   const canSave = form.cliente.trim().length > 0 && form.data.trim().length > 0;
 
-  const handleSave = () => {
-    if (!canSave) return;
-    onSave({
-      lavorazioneId,
-      lavorazioneLabel: lav.label,
-      cliente: form.cliente,
-      vino: full
-        ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
-        : form.vino,
-      emailAggiuntiva,
-      ora: new Date().toLocaleTimeString("it-IT", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    });
+  const handleSave = async () => {
+    if (!canSave || saving) return;
+    setSaveError("");
 
-    // Genera il PDF del rapportino, lo scarica e apre l'email pronta
+    // Il rapportino viene considerato "salvato" solo se arriva nell'archivio
+    // condiviso (Supabase). Per questo il PDF e la mail vengono preparati
+    // dopo, non prima: se non c'è connessione non deve succedere che il PDF
+    // parta/arrivi al cliente mentre l'intervento non resta in archivio.
+    const vinoRiepilogo = full
+      ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
+      : form.vino;
+
+    let doc, filename;
     try {
-      const { doc, filename } = generaRapportinoPDF({
+      const generato = generaRapportinoPDF({
+        lavorazioneId,
         lavorazioneLabel: lav.label,
         cliente: form.cliente,
         data: form.data,
+        sanificazione: form.sanificazione,
+        oraInizio,
+        oraFine,
+        oreViaggioAndata,
+        oreViaggioRitorno,
+        altriOperatori,
         prodotti: full ? form.prodotti : null,
         vinoSemplice: form.vino,
         noteSemplice: form.note,
@@ -1421,58 +1560,63 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         nomeCliente,
         emailAggiuntiva,
       });
-      doc.save(filename);
-      setTimeout(() => {
-        apriEmailConDestinatari({
-          filename,
-          cliente: form.cliente,
-          lavorazioneLabel: lav.label,
-          emailAggiuntiva,
-        });
-      }, 600);
-
-      // Manda una copia al database condiviso (archivio), se c'è connessione.
-      // Riprova automaticamente in caso di errore di rete (bug noto di
-      // Safari sulle app installate su iPhone). Se fallisce comunque, il
-      // PDF resta scaricato sul telefono: non blocchiamo il salvataggio.
-      window.alert("ARCHIVIO — avvio tentativo di salvataggio…");
-      try {
-        const pdfBase64 = doc.output("datauristring").split(",")[1];
-        const vinoRiepilogo = full
-          ? form.prodotti.map((p) => p.vino).filter(Boolean).join(", ")
-          : form.vino;
-        conRiprovaDiRete(async () => {
-          const { error } = await supabase.from("rapportini").insert({
-            lavorazione: lav.label,
-            cliente: form.cliente,
-            vino: vinoRiepilogo,
-            operatore: nomeOperatore,
-            dettagli: `Data intervento: ${form.data || "—"}`,
-            pdf_base64: pdfBase64,
-          });
-          if (error) throw error;
-        })
-          .then(() => {
-            window.alert("ARCHIVIO — salvato correttamente ✓");
-          })
-          .catch((e) => {
-            console.error("Errore salvataggio archivio (dopo i tentativi):", e);
-            window.alert(
-              "ARCHIVIO — errore dopo i tentativi:\n" +
-                "message: " + (e.message || "—") + "\n" +
-                "code: " + (e.code || "—") + "\n" +
-                "details: " + (e.details || "—") + "\n" +
-                "hint: " + (e.hint || "—")
-            );
-          });
-      } catch (e) {
-        console.error("Errore preparazione dati per l'archivio:", e);
-        window.alert("ARCHIVIO — errore prima dell'invio:\n" + e.message);
-      }
+      doc = generato.doc;
+      filename = generato.filename;
     } catch (e) {
       console.error("Errore nella generazione del PDF:", e);
+      setSaveError(
+        "Non sono riuscito a generare il PDF. Controlla i dati inseriti e riprova."
+      );
+      return;
     }
 
+    setSaving(true);
+    try {
+      const pdfBase64 = doc.output("datauristring").split(",")[1];
+      await conRiprovaDiRete(async () => {
+        const { error } = await supabase.from("rapportini").insert({
+          lavorazione: lav.label,
+          cliente: form.cliente,
+          vino: vinoRiepilogo,
+          operatore: nomeOperatore,
+          dettagli: `Data intervento: ${form.data || "—"}`,
+          pdf_base64: pdfBase64,
+        });
+        if (error) throw error;
+      });
+    } catch (e) {
+      console.error("Errore salvataggio archivio (dopo i tentativi):", e);
+      setSaving(false);
+      setSaveError(
+        "Nessuna connessione di rete: l'intervento NON è stato salvato in archivio e il PDF non è stato inviato. La bozza resta qui — riprova a premere \"Salva intervento\" quando hai connessione."
+      );
+      return;
+    }
+
+    // Salvato in archivio: ora sì, scarica il PDF e apri l'email pronta.
+    onSave({
+      lavorazioneId,
+      lavorazioneLabel: lav.label,
+      cliente: form.cliente,
+      vino: vinoRiepilogo,
+      emailAggiuntiva,
+      ora: new Date().toLocaleTimeString("it-IT", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    });
+
+    doc.save(filename);
+    setTimeout(() => {
+      apriEmailConDestinatari({
+        filename,
+        cliente: form.cliente,
+        lavorazioneLabel: lav.label,
+        emailAggiuntiva,
+      });
+    }, 600);
+
+    setSaving(false);
     clearDraft(lavorazioneId);
     setSaved(true);
     setTimeout(() => onBack(), 1400);
@@ -1531,8 +1675,41 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </Field>
         </div>
 
+        {full && (
+          <label style={styles.bioRow}>
+            <input
+              type="checkbox"
+              checked={form.sanificazione}
+              onChange={(e) => set({ sanificazione: e.target.checked })}
+              style={styles.checkbox}
+            />
+            <span style={styles.bioText}>SANIFICAZIONE</span>
+          </label>
+        )}
+
         {full ? (
           <>
+            {lavorazioneId === "confezionamento" && (
+              <TabellaControlliConforme
+                titolo="Controlli pre-operativi impianto/attrezzatura"
+                righe={[
+                  { key: "verificaPulizia", label: "Verifica pulizia" },
+                  {
+                    key: "assenzaPartiDanneggiate",
+                    label: "Assenza parti danneggiate",
+                  },
+                  { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
+                  { key: "conformitaCapsule", label: "Conformità capsule" },
+                  {
+                    key: "conformitaEtichette",
+                    label: "Conformità etichette",
+                  },
+                ]}
+                valori={form.controlliPreOperativi}
+                onChange={(v) => set({ controlliPreOperativi: v })}
+              />
+            )}
+
             {form.prodotti.map((p, idx) => (
               <div key={idx} style={styles.prodottoBlock}>
                 <div style={styles.prodottoHeader}>
@@ -1785,6 +1962,26 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
+                {lavorazioneId === "confezionamento" && (
+                  <TabellaControlliConforme
+                    titolo="Controlli di processo"
+                    righe={[
+                      {
+                        key: "posizionamentoCapsule",
+                        label: "Posizionamento capsule",
+                      },
+                      {
+                        key: "posizionamentoEtichette",
+                        label: "Posizionamento etichette",
+                      },
+                      { key: "timbraturaLotto", label: "Timbratura lotto" },
+                      { key: "imballaggio", label: "Imballaggio" },
+                    ]}
+                    valori={p.controlliProcesso}
+                    onChange={(v) => setProdotto(idx, { controlliProcesso: v })}
+                  />
+                )}
+
                 <ControlTable
                   rows={p.controlli}
                   onChange={(controlli) => setProdotto(idx, { controlli })}
@@ -1866,6 +2063,62 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </Field>
         )}
 
+        <div style={styles.fieldGrid2}>
+          <Field label="Ora inizio">
+            <input
+              type="time"
+              style={styles.input}
+              value={oraInizio}
+              onChange={(e) => setOraInizio(e.target.value)}
+            />
+          </Field>
+          <Field label="Ora fine">
+            <input
+              type="time"
+              style={styles.input}
+              value={oraFine}
+              onChange={(e) => setOraFine(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div style={styles.fieldGrid2}>
+          <Field label="Ore viaggio andata">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.5"
+              min="0"
+              placeholder="es. 1,5"
+              style={styles.input}
+              value={oreViaggioAndata}
+              onChange={(e) => setOreViaggioAndata(e.target.value)}
+            />
+          </Field>
+          <Field label="Ore viaggio ritorno">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.5"
+              min="0"
+              placeholder="es. 1,5"
+              style={styles.input}
+              value={oreViaggioRitorno}
+              onChange={(e) => setOreViaggioRitorno(e.target.value)}
+            />
+          </Field>
+        </div>
+
+        <Field label="Secondo operatore / altro operatore">
+          <input
+            type="text"
+            style={styles.input}
+            placeholder="nome e cognome (o più nomi separati da virgola)"
+            value={altriOperatori}
+            onChange={(e) => setAltriOperatori(e.target.value)}
+          />
+        </Field>
+
         <div style={styles.sigGrid}>
           <SignaturePad
             label="Firma operatore"
@@ -1921,16 +2174,25 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
               cliente e data sono necessari per salvare
             </span>
           )}
+          {saveError && (
+            <span style={{ ...styles.saveHint, color: "#D98F7A" }}>
+              {saveError}
+            </span>
+          )}
           <button
             onClick={handleSave}
-            disabled={!canSave}
+            disabled={!canSave || saving}
             style={{
               ...styles.saveBtn,
-              opacity: canSave ? 1 : 0.4,
-              cursor: canSave ? "pointer" : "not-allowed",
+              opacity: canSave && !saving ? 1 : 0.4,
+              cursor: canSave && !saving ? "pointer" : "not-allowed",
             }}
           >
-            {saved ? "Intervento salvato ✓" : "Salva intervento"}
+            {saved
+              ? "Intervento salvato ✓"
+              : saving
+              ? "Salvataggio in corso…"
+              : "Salva intervento"}
           </button>
         </div>
       </div>
@@ -2097,6 +2359,11 @@ const styles = {
     fontSize: 11.5,
     color: COLORS.textMuted,
     textTransform: "capitalize",
+  },
+  contatoreArchivio: {
+    fontSize: 12,
+    color: COLORS.textMuted,
+    marginBottom: 10,
   },
   archivioBtn: {
     display: "block",
