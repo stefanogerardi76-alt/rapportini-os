@@ -747,6 +747,48 @@ function emptyAltriForm() {
   return { cliente: "", data: "", vino: "", note: "" };
 }
 
+// Una bozza salvata prima dell'aggiunta di un campo nuovo (es. "bottiglie
+// prodotte", le tabelle "Conforme/Non conforme" di Confezionamento) non ha
+// quella proprietà: senza questa funzione, riaprendola dà pagina bianca
+// perché il componente legge un valore undefined. Qui si riempiono solo i
+// pezzi mancanti, senza toccare quello che l'operatore aveva già scritto.
+function formConDefaultSicuri(formSalvato, full) {
+  const base = full ? emptyFullForm() : emptyAltriForm();
+  if (!formSalvato) return base;
+  if (!full) return { ...base, ...formSalvato };
+
+  const prodottiSalvati =
+    Array.isArray(formSalvato.prodotti) && formSalvato.prodotti.length > 0
+      ? formSalvato.prodotti
+      : base.prodotti;
+
+  return {
+    ...base,
+    ...formSalvato,
+    controlliPreOperativi: {
+      ...base.controlliPreOperativi,
+      ...(formSalvato.controlliPreOperativi || {}),
+    },
+    prodotti: prodottiSalvati.map((p) => {
+      const pBase = emptyProdotto();
+      const righeBase = pBase.controlli;
+      const righeSalvate = Array.isArray(p?.controlli) ? p.controlli : righeBase;
+      return {
+        ...pBase,
+        ...p,
+        controlliProcesso: {
+          ...pBase.controlliProcesso,
+          ...(p?.controlliProcesso || {}),
+        },
+        controlli: righeBase.map((rigaBase, i) => ({
+          ...rigaBase,
+          ...(righeSalvate[i] || {}),
+        })),
+      };
+    }),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Firma — pad a canvas, nessuna libreria esterna
 // ---------------------------------------------------------------------------
@@ -1613,7 +1655,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const bozzaIniziale = loadDraft(lavorazioneId);
 
   const [form, setForm] = useState(
-    bozzaIniziale?.form || (full ? emptyFullForm() : emptyAltriForm())
+    formConDefaultSicuri(bozzaIniziale?.form, full)
   );
   const [firmaOperatore, setFirmaOperatore] = useState(
     bozzaIniziale?.firmaOperatore || ""
