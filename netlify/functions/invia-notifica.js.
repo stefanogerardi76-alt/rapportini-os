@@ -1,0 +1,77 @@
+// Funzione Netlify: manda una notifica push a Valentina Erović ogni volta che
+// un rapportino viene archiviato. Chiamata dall'app dopo il salvataggio.
+//
+// Variabili d'ambiente da configurare su Netlify:
+//   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY
+//   VAPID_SUBJECT                          es. mailto:tuaemail@gmail.com
+//   SUPABASE_URL, SUPABASE_ANON_KEY        gli stessi dell'app (chiave pubblicabile)
+
+const webpush = require("web-push");
+
+const DESTINATARIA = "Valentina Erović";
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, body: "Method not allowed" };
+  }
+
+  const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT, SUPABASE_URL, SUPABASE_ANON_KEY } =
+    process.env;
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY || !VAPID_SUBJECT || !SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    console.error("Variabili d'ambiente per le notifiche non configurate.");
+    return { statusCode: 500, body: JSON.stringify({ error: "Notifiche non configurate" }) };
+  }
+
+  let payload = {};
+  try {
+    payload = JSON.parse(event.body || "{}");
+  } catch (e) {
+    return { statusCode: 400, body: JSON.stringify({ error: "JSON non valido" }) };
+  }
+  const { cliente, lavorazione, operatore } = payload;
+
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+
+  const intestazioni = {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  };
+
+  try {
+    const risposta = await fetch(
+      `${SUPABASE_URL}/rest/v1/push_subscriptions?operatore=eq.${encodeURIComponent(
+        DESTINATARIA
+      )}&select=endpoint,subscription`,
+      { headers: intestazioni }
+    );
+    if (!risposta.ok) throw new Error(`Supabase ${risposta.status}`);
+    const abbonamenti = await risposta.json();
+
+    const messaggio = JSON.stringify({
+      title: "Rapportino archiviato",
+      body: [lavorazione, cliente, operatore && `(${operatore})`].filter(Boolean).join(" — "),
+    });
+
+    let inviate = 0;
+    for (const a of abbonamenti) {
+      try {
+        await webpush.sendNotification(a.subscription, messaggio);
+        inviate++;
+      } catch (e) {
+        // Dispositivo non più valido: lo togliamo dall'elenco
+        if (e.statusCode === 404 || e.statusCode === 410) {
+          await fetch(
+            `${SUPABASE_URL}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(a.endpoint)}`,
+            { method: "DELETE", headers: intestazioni }
+          );
+        } else {
+          console.error("Errore invio push:", e.statusCode, e.body);
+        }
+      }
+    }
+    return { statusCode: 200, body: JSON.stringify({ ok: true, inviate }) };
+  } catch (e) {
+    console.error("Errore notifiche:", e);
+    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
+  }
+};
