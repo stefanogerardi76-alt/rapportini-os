@@ -1,10 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import oenoLogo from "./oeno-logo.png";
-import { generaRapportinoPDF, apriEmailConDestinatari } from "./pdfGenerator";
+import { generaRapportinoPDF } from "./pdfGenerator";
 import { supabase } from "./supabaseClient";
+import { useRegisterSW } from "virtual:pwa-register/react";
 
 // Amministratori — vedono il pulsante "Archivio rapportini" in home
-const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović", "Raffaele Santini"];
+const AMMINISTRATORI = ["Stefano Gerardi", "Simona Gussago", "Valentina Erović", "Raffaele Santini", "Admin"];
+// Profili con PIN fisso: non chiedono mai di cambiare il PIN e non compaiono
+// in "Gestione PIN" (il PIN si cambia solo modificando OPERATORI qui sotto).
+const PROFILI_PIN_FISSO = ["Admin"];
 
 // Su iPhone, quando l'app è installata sulla schermata Home, Safari a volte
 // blocca in modo casuale le richieste di rete verso siti esterni (errore
@@ -41,6 +45,12 @@ const OPERATORI = [
   { nome: "Marco Santillo", pin: "1310" },
   { nome: "Giacomo Savardi", pin: "1205" },
   { nome: "Raffaele Santini", pin: "2612" },
+  { nome: "Dario Marchi", pin: "1605" },
+  { nome: "Matteo Gnali", pin: "0911" },
+  { nome: "Bogdan Afloroaiei", pin: "3004" },
+  { nome: "Gheorghe Munteanu", pin: "1303" },
+  { nome: "Fabio Borboni", pin: "1007" },
+  { nome: "Admin", pin: "1966" },
 ];
 
 const CLIENTI = [
@@ -643,14 +653,37 @@ const CLIENTI = [
   { nome: "CANTINE RIUNITE - MASCHIO", email: "ggava.maschio@riuniteciv.it, mbrescacin@riuniteciv.iT" },
 ];
 
+// Testo del corpo della mail inviata al cliente col PDF allegato.
+function testoEmailCliente({ filename, lavorazioneLabel, cliente, data, hub }) {
+  if (hub) {
+    return `Buongiorno,\n\nin allegato il rapportino ${lavorazioneLabel || ""} del cliente ${cliente || ""}${data ? ` (${data})` : ""}.\n\nCordiali saluti.`;
+  }
+  return `Gentile Cliente,\n\nLa ringraziamo per la collaborazione.\n\nIn allegato trova il rapportino di chiusura della giornata.\n\nCordiali saluti e buon lavoro.`;
+}
+
 const LAVORAZIONI = [
   { id: "tiraggio", label: "Tiraggio", cifra: "01" },
   { id: "sboccatura", label: "Sboccatura", cifra: "02" },
-  { id: "imbottigliamento", label: "Imbottigliamento", cifra: "03" },
+  { id: "sboccatura-confezionamento", label: "Sboccatura + Confezionamento", cifra: "03" },
   { id: "confezionamento", label: "Confezionamento", cifra: "04" },
-  { id: "travaso", label: "Travaso", cifra: "05" },
-  { id: "altri", label: "Altri lavori", cifra: "06" },
+  { id: "imbottigliamento", label: "Imbottigliamento", cifra: "05" },
+  { id: "imbottigliamento-confezionamento", label: "Imbottigliamento + Confezionamento", cifra: "06" },
+  { id: "travaso", label: "Travaso", cifra: "07" },
+  { id: "altri", label: "Altri lavori", cifra: "08" },
+  { id: "sboccatura-hub", label: "Sboccatura Hub", cifra: "09", hub: true },
+  { id: "confezionamento-hub", label: "Confezionamento Hub", cifra: "10", hub: true },
+  { id: "sboccatura-confezionamento-hub", label: "Sboccatura + Confezionamento Hub", cifra: "11", hub: true },
 ];
+
+// Nome della lavorazione "di base" di un rapportino archiviato: le versioni
+// Hub contano nei contatori come quelle normali; "Sboccatura + Confezionamento
+// Hub" conta come Sboccatura (una sola volta, non due).
+function lavorazioneBase(etichetta) {
+  return String(etichetta || "")
+    .replace(/ Hub$/, "")
+    .replace(/^Sboccatura \+ Confezionamento$/, "Sboccatura")
+    .replace(/^Imbottigliamento \+ Confezionamento$/, "Imbottigliamento");
+}
 
 const HAS_FULL_MASK = new Set([
   "tiraggio",
@@ -658,7 +691,19 @@ const HAS_FULL_MASK = new Set([
   "imbottigliamento",
   "confezionamento",
   "travaso",
+  "sboccatura-hub",
+  "confezionamento-hub",
+  "sboccatura-confezionamento-hub",
+  "sboccatura-confezionamento",
+  "imbottigliamento-confezionamento",
 ]);
+
+// Destinatari fissi dei rapportini "Hub" (al posto dell'email del cliente)
+const HUB_DESTINATARI = [
+  "Cantina@oenoitalia.com",
+  "Vezzoli@oenoitalia.com",
+  "Assistente.faustini@oenoitalia.com",
+].join(", ");
 
 // Griglia controlli: ogni 15 minuti dalle 7:00 alle 18:00
 function buildControlSlots() {
@@ -684,6 +729,14 @@ function emptyControlRows() {
     posizionamentoGabbietta: false,
     bidule: false,
     chiusura: false,
+    // colonne usate solo nel foglio Imbottigliamento
+    // colonne usate solo nel foglio Tiraggio (la presenza bidule è `bidule`)
+    conformi: false,
+    nonConformi: false,
+    filtrazioneBar: "",
+    verificaDosaggio: false,
+    tappoRaso: false,
+    presenzaVuoto: false,
     // colonne usate solo nel foglio Confezionamento
     capsula: false,
     fronte: false,
@@ -699,6 +752,8 @@ function emptyProdotto() {
     vino: "",
     bio: false,
     lottoVino: "",
+    // Solo Imbottigliamento: "Servizi accessori" (Sì / No + testo) per vino
+    serviziImbott: {},
     tappoTipo: "",
     tappoMarca: "",
     tappoLotto: "",
@@ -715,6 +770,31 @@ function emptyProdotto() {
     qtaAltro: "",
     incartonamento: false, // solo Confezionamento
     incartonamentoTipo: "", // solo Confezionamento
+    // Solo Sboccatura: paragrafo dopo i controlli di linea, uno per ogni vino
+    bottigliePerColmatura: "",
+    bottiglieRotte: "",
+    // "Registro rotture vetri (oPRP)" — tutti i vini di tutti i rapportini
+    // completi (PT 8.5.3): 4 righe rotte/segregate, note, conferma assenza vetro
+    registroVetri: [
+      { rotte: "", segregate: "" },
+      { rotte: "", segregate: "" },
+      { rotte: "", segregate: "" },
+      { rotte: "", segregate: "" },
+    ],
+    registroVetriNote: "",
+    okAssentiVetro: false,
+    // Solo Travaso (foglio cartaceo): dati prodotto, materiali, lotto bottiglie
+    // e sovrapressione, uno per ogni vino
+    quantita: "",
+    capacita: "",
+    bottigliePerse: "",
+    lottoBottiglie: "",
+    materialiTravaso: [0, 1, 2, 3, 4, 5].map(() => ({ nome: "", lotto: "", quantita: "" })),
+    sovrapressionePartenza: "",
+    aerometroInizio: false,
+    aerometroMeta: false,
+    aerometroFine: false,
+    sovrapressioneFinale: "",
     note: "",
     controlli: emptyControlRows(),
     // "Controlli di processo" — Confezionamento e Sboccatura, uno per ogni
@@ -730,6 +810,12 @@ function emptyProdotto() {
       chiusuraTappi: "",
       chiusuraGabbiette: "",
       lavaggioBottiglie: "",
+      // solo Imbottigliamento
+      avvinamentoPreAvvio: "",
+      integritaCarter: "",
+      pressioneSciacquatrice: "",
+      deltaPressioneFiltri: "",
+      ugelliSciacquatrice: "",
     },
   };
 }
@@ -757,9 +843,57 @@ function emptyFullForm() {
       conformitaCapsule: "",
       conformitaEtichette: "",
       sanificazioneConforme: "",
+      // solo Imbottigliamento
+      vaporizzazionePreAvvio: "",
+      vaporizzazionePreAvvioInizio: "",
+      vaporizzazionePreAvvioFine: "",
+      pressioneSciacquatrice: "",
+      deltaPressioneFiltri: "",
+      ugelliSciacquatrice: "",
     },
     prodotti: [emptyProdotto()],
+    // Solo Imbottigliamento: fasi di lavorazione (Sì / No), dopo "Sanificazione"
+    fasiImbottigliamento: {
+      risciacquoBottiglie: "",
+      soffiaggioBottiglie: "",
+      filtrazioneCartoni: "",
+      filtrazioneCartuccia: "",
+      dosaggioGommaArabica: "",
+      prevaquazione: "",
+      vuotoImmissAzoto: "",
+    },
+    // Note libere + foto (dopo "Quantità bottiglie fatte")
+    noteFinali: "",
+    foto: [],
   };
+}
+
+// Legge una foto scelta dall'operatore, la riduce (max 1000px sul lato lungo)
+// e la restituisce come JPEG in base64: così bozza, PDF e archivio restano leggeri.
+function riduciFoto(file, maxLato = 1000, qualita = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Lettura foto non riuscita"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Foto non valida"));
+      img.onload = () => {
+        const scala = Math.min(1, maxLato / Math.max(img.width, img.height));
+        const w = Math.round(img.width * scala);
+        const h = Math.round(img.height * scala);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve({ dataUrl: canvas.toDataURL("image/jpeg", qualita), w, h });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function emptyAltriForm() {
@@ -803,6 +937,7 @@ function formConDefaultSicuri(formSalvato, full) {
           ...pBase.controlliProcesso,
           ...(p?.controlliProcesso || {}),
         },
+        serviziImbott: { ...(p?.serviziImbott || {}) },
         controlli: righeBase.map((rigaBase, i) => ({
           ...rigaBase,
           ...(righeSalvate[i] || {}),
@@ -898,8 +1033,8 @@ function SignaturePad({ label, value, onChange, nome, onNomeChange }) {
       />
       <canvas
         ref={canvasRef}
-        width={520}
-        height={140}
+        width={700}
+        height={250}
         onMouseDown={start}
         onMouseMove={move}
         onMouseUp={end}
@@ -931,7 +1066,60 @@ const RIGHE_PRE_OPERATIVI = {
     { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
     { key: "sanificazioneConforme", label: "Sanificazione" },
   ],
+  imbottigliamento: [
+    { key: "verificaPulizia", label: "Verifica pulizia" },
+    { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+    {
+      key: "sanificazioneConforme",
+      label: "Sanificazione",
+      nota: "(Risciacquo con acqua, invaso e allagamento con formulato igienizzante, risciacquo)",
+    },
+    {
+      key: "vaporizzazionePreAvvio",
+      label: "Vaporizzazione pre-avvio",
+      nota: "20' di vapore fluente 100°C",
+      orari: true,
+    },
+    {
+      key: "pressioneSciacquatrice",
+      label: "Verifica pressione di esercizio della sciacquatrice ≥ 1,5 bar * (oPRP)",
+      nota: "Se valore non rispettato verificare il corretto funzionamento dell'impianto prima dell'inizio delle lavorazioni",
+    },
+    {
+      key: "deltaPressioneFiltri",
+      label: "Verifica Δ pressione filtri sciacquatrice",
+      nota: "(Δ max 1,2 bar)",
+    },
+    {
+      key: "ugelliSciacquatrice",
+      label: "Verifica corretto funzionamento ugelli sciacquatrice",
+    },
+  ],
+  "sboccatura-confezionamento": [
+    { key: "verificaPulizia", label: "Verifica pulizia" },
+    { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+    { key: "puliziaBottiglia", label: "Pulizia bottiglia" },
+    { key: "conformitaCapsule", label: "Conformità capsule" },
+    { key: "conformitaEtichette", label: "Conformità etichette" },
+    { key: "sanificazioneConforme", label: "Sanificazione" },
+  ],
 };
+
+// Travaso (foto del foglio): pre-operativi e controlli di processo
+RIGHE_PRE_OPERATIVI.travaso = [
+  { key: "puliziaLinea", label: "Pulizia linea" },
+  { key: "assenzaPartiDanneggiate", label: "Assenza parti danneggiate" },
+  { key: "sanificazioneConforme", label: "Sanificazione" },
+  { key: "vaporizzazionePreAvvio", label: "Vaporizzazione pre-avvio" },
+];
+// Tiraggio: stessi controlli pre-operativi dell'Imbottigliamento (foto del foglio)
+RIGHE_PRE_OPERATIVI.tiraggio = RIGHE_PRE_OPERATIVI.imbottigliamento;
+// Imbottigliamento + Confezionamento: righe dell'Imbottigliamento + quelle di
+// Confezionamento (pulizia bottiglia, capsule, etichette)
+RIGHE_PRE_OPERATIVI["imbottigliamento-confezionamento"] = [
+  ...RIGHE_PRE_OPERATIVI.imbottigliamento,
+  ...RIGHE_PRE_OPERATIVI.confezionamento.slice(2),
+];
 
 const RIGHE_CONTROLLI_PROCESSO = {
   confezionamento: [
@@ -948,7 +1136,60 @@ const RIGHE_CONTROLLI_PROCESSO = {
     { key: "chiusuraGabbiette", label: "Chiusura gabbiette" },
     { key: "lavaggioBottiglie", label: "Lavaggio bottiglie" },
   ],
+  imbottigliamento: [
+    { key: "avvinamentoPreAvvio", label: "Avvinamento pre-avvio" },
+    { key: "chiusuraTappi", label: "Chiusura tappi" },
+    { key: "livelloRiempimento", label: "Livello di riempimento" },
+    { key: "integritaCarter", label: "Integrità carter" },
+    {
+      key: "pressioneSciacquatrice",
+      label: "Verifica pressione di esercizio della sciacquatrice ≥ 1,5 bar (oPRP)",
+      nota: "Se valore non rispettato interrompere le lavorazioni e verificare il corretto funzionamento dell'impianto prima del riavvio",
+    },
+    {
+      key: "deltaPressioneFiltri",
+      label: "Verifica Δ pressione filtri sciacquatrice",
+      nota: "(Δ max 1,2 bar)",
+    },
+    {
+      key: "ugelliSciacquatrice",
+      label: "Verifica corretto funzionamento ugelli sciacquatrice",
+    },
+  ],
+  "sboccatura-confezionamento": [
+    { key: "avvinamentoLiqueur", label: "Avvinamento liqueur" },
+    { key: "dosaggioLiqueur", label: "Dosaggio liqueur" },
+    { key: "livelloRiempimento", label: "Livello di riempimento" },
+    { key: "chiusuraTappi", label: "Chiusura tappi" },
+    { key: "chiusuraGabbiette", label: "Chiusura gabbiette" },
+    { key: "lavaggioBottiglie", label: "Lavaggio bottiglie" },
+    { key: "posizionamentoCapsule", label: "Posizionamento capsule" },
+    { key: "posizionamentoEtichette", label: "Posizionamento etichette" },
+    { key: "timbraturaLotto", label: "Timbratura lotto" },
+    { key: "imballaggio", label: "Imballaggio" },
+  ],
 };
+
+// Tiraggio: controlli di processo (foto del foglio) — stesse righe
+// dell'Imbottigliamento, con "Timbratura lotto su tappi" al posto di "Integrità carter"
+RIGHE_CONTROLLI_PROCESSO.travaso = [
+  { key: "temperaturaProdotto", label: "Temperatura prodotto" },
+  { key: "valorePressione", label: "Valore pressione" },
+  { key: "livelloRiempimento", label: "Livello di riempimento" },
+  { key: "chiusuraTappi", label: "Chiusura tappi" },
+  { key: "chiusuraGabbiette", label: "Chiusura gabbiette" },
+];
+RIGHE_CONTROLLI_PROCESSO["imbottigliamento-confezionamento"] = [
+  ...RIGHE_CONTROLLI_PROCESSO.imbottigliamento,
+  ...RIGHE_CONTROLLI_PROCESSO.confezionamento,
+];
+RIGHE_CONTROLLI_PROCESSO.tiraggio = [
+  { key: "avvinamentoPreAvvio", label: "Avvinamento pre-avvio" },
+  { key: "chiusuraTappi", label: "Chiusura tappi" },
+  { key: "livelloRiempimento", label: "Livello di riempimento" },
+  { key: "timbraturaLotto", label: "Timbratura lotto su tappi" },
+  ...RIGHE_CONTROLLI_PROCESSO.imbottigliamento.slice(4),
+];
 
 // ---------------------------------------------------------------------------
 // Tabella "Conforme / Non conforme / N.Applic." a scelta singola per riga.
@@ -959,24 +1200,91 @@ const OPZIONI_CONFORME = [
   { value: "nApplic", label: "N.Applic." },
 ];
 
-function TabellaControlliConforme({ titolo, righe, valori, onChange }) {
+// Fasi di lavorazione dell'Imbottigliamento (tabella a due colonne Sì / No)
+const OPZIONI_SI_NO = [
+  { value: "si", label: "Sì" },
+  { value: "no", label: "No" },
+];
+const RIGHE_FASI_IMBOTTIGLIAMENTO = [
+  { key: "risciacquoBottiglie", label: "Risciacquo bottiglie" },
+  { key: "soffiaggioBottiglie", label: "Soffiaggio bottiglie aria-azoto" },
+  { key: "filtrazioneCartoni", label: "Filtrazione cartoni", testo: true },
+  { key: "filtrazioneCartuccia", label: "Filtrazione cartuccia", testo: true },
+  { key: "dosaggioGommaArabica", label: "Dosaggio gomma arabica", testo: true },
+  { key: "prevaquazione", label: "Prevaquazione" },
+  { key: "vuotoImmissAzoto", label: "Vuoto con immis. azoto" },
+];
+
+// Travaso: "Servizi accessori" per vino (Sì / No) e materiali (lotto + quantità)
+const RIGHE_SERVIZI_TRAVASO = [
+  { key: "filtrazioneLiqueur", label: "Filtrazione liqueur" },
+  { key: "svuotamentoBottiglie", label: "Svuotamento bottiglie" },
+  { key: "dosaggioManualeLiqueur", label: "Dosaggio manuale liqueur" },
+  { key: "livelloRiempimentoServizio", label: "Livello riempimento" },
+  { key: "pressioneRiempitrice", label: "Pressione riempitrice" },
+];
+// Le prime tre righe dei materiali hanno il nome fisso, le altre sono libere
+const MATERIALI_TRAVASO_FISSI = ["Filtri cartone Becopad 450", "Tappi a fungo", "Gabbiette"];
+
+// Tiraggio: "Servizi accessori" per vino (Sì / No + testo), come Imbottigliamento
+const RIGHE_SERVIZI_TIRAGGIO = [
+  { key: "filtrazioneCartuccia", label: "Filtrazione cartuccia", testo: true },
+  { key: "dosaggioLieviti", label: "Dosaggio lieviti", testo: true },
+];
+
+function TabellaControlliConforme({ titolo, righe, valori, onChange, opzioni = OPZIONI_CONFORME }) {
   return (
     <div style={styles.qtaBlock}>
       <div style={styles.sectionLabel}>{titolo}</div>
       <div style={styles.qtaTable}>
         <div style={styles.qtaHead}>
           <span style={{ flex: 1 }}>tipo controllo</span>
-          {OPZIONI_CONFORME.map((o) => (
+          {opzioni.map((o) => (
             <span key={o.value} style={styles.qtaColHead}>
               {o.label}
             </span>
           ))}
         </div>
         {righe.map((r) => (
-          <div key={r.key} style={styles.conformeRow}>
-            <span style={{ ...styles.qtaLabel, flex: 1 }}>{r.label}</span>
-            {OPZIONI_CONFORME.map((o) => (
-              <label key={o.value} style={{ ...styles.checkCell, width: 62, flex: "none" }}>
+          <div key={r.key} style={styles.controlRow}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span style={styles.qtaLabel}>{r.label}</span>
+              {r.nota && (
+                <div style={{ fontSize: 11.5, fontStyle: "italic", color: COLORS.textMuted, marginTop: 2 }}>
+                  {r.nota}
+                </div>
+              )}
+              {r.testo && (
+                <input
+                  type="text"
+                  placeholder="scrivi qui"
+                  value={valori[`${r.key}Testo`] || ""}
+                  onChange={(e) =>
+                    onChange({ ...valori, [`${r.key}Testo`]: e.target.value })
+                  }
+                  style={{ ...styles.input, padding: "6px 8px", marginTop: 6 }}
+                />
+              )}
+              {r.orari && (
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  {[["Inizio", "Inizio"], ["Fine", "Fine"]].map(([et, suf]) => (
+                    <label key={suf} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: COLORS.textMuted }}>
+                      Ora {et.toLowerCase()}
+                      <input
+                        type="time"
+                        value={valori[`${r.key}${suf}`] || ""}
+                        onChange={(e) =>
+                          onChange({ ...valori, [`${r.key}${suf}`]: e.target.value })
+                        }
+                        style={{ ...styles.input, padding: "6px 8px", width: 104 }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            {opzioni.map((o) => (
+              <label key={o.value} style={{ ...styles.checkCell, width: 62 }}>
                 <input
                   type="checkbox"
                   checked={valori[r.key] === o.value}
@@ -997,27 +1305,28 @@ function TabellaControlliConforme({ titolo, righe, valori, onChange }) {
   );
 }
 
-function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
+// Colonne della tabella combinata (Sboccatura + 6 spunte di Confezionamento)
+const stileGrigliaCombinato = {
+  gridTemplateColumns: "64px 76px 1fr 1fr 70px 70px 1fr repeat(6, 60px)",
+};
+
+function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice, combinato, vetri, imbottigliamento }) {
   const update = (idx, patch) => {
     const next = rows.slice();
     next[idx] = { ...next[idx], ...patch };
     onChange(next);
   };
-  const filledCount = confezionamento
+  const filledCount = tiraggio
+    ? rows.filter((r) => r.bottiglieProdotte !== "" || r.livello !== "").length
+    : imbottigliamento
+    ? rows.filter(
+        (r) => r.bottiglieProdotte !== "" || r.filtrazioneBar !== "" || r.livello !== ""
+      ).length
+    : confezionamento
     ? rows.filter(
         (r) => r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
       ).length
     : rows.filter((r) => r.livello !== "").length;
-
-  // Stessa griglia per intestazione e righe: così ogni campo resta
-  // esattamente sotto la sua colonna, su qualsiasi larghezza di schermo.
-  const griglia = confezionamento
-    ? "48px repeat(7, minmax(0, 1fr))"
-    : semplice
-    ? "48px repeat(3, minmax(0, 1fr)) 64px 64px minmax(0, 1fr)"
-    : "48px repeat(4, minmax(0, 1fr)) repeat(4, 60px)";
-  const head = { ...styles.controlTableHead, gridTemplateColumns: griglia };
-  const riga = { ...riga, gridTemplateColumns: griglia };
 
   return (
     <div style={styles.controlBlock}>
@@ -1033,23 +1342,179 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
         </div>
       </div>
 
-      {confezionamento ? (
+      {tiraggio ? (
         <div style={styles.controlTableWrap}>
-          <div style={head}>
-            <span style={styles.headCell}>ora</span>
-            <span style={styles.headCell}>bottiglie prodotte</span>
-            <span style={styles.headCellCenter}>capsula</span>
-            <span style={styles.headCellCenter}>fronte</span>
-            <span style={styles.headCellCenter}>retro</span>
-            <span style={styles.headCellCenter}>collare</span>
-            <span style={styles.headCellCenter}>fascetta</span>
-            <span style={styles.headCellCenter}>lotto</span>
+          <div style={styles.controlTableScrollX}>
+            <div
+              style={{
+                ...styles.controlTableHead,
+                ...styles.gridSemplice,
+                gridTemplateColumns: "64px 76px 64px 64px 64px 1fr",
+                minWidth: 560,
+              }}
+            >
+              <span>ora</span>
+              <span>bottiglie prodotte</span>
+              <span style={{ textAlign: "center" }}>conformi</span>
+              <span style={{ textAlign: "center" }}>non conformi</span>
+              <span style={{ textAlign: "center" }}>presenza bidule</span>
+              <span>valore riscontrato (mm)</span>
+            </div>
+            {rows.map((r, i) => (
+              <div
+                key={r.ora}
+                style={{
+                  ...styles.controlRow,
+                  ...styles.gridSemplice,
+                  gridTemplateColumns: "64px 76px 64px 64px 64px 1fr",
+                  minWidth: 560,
+                  background:
+                    r.bottiglieProdotte !== "" || r.livello !== ""
+                      ? "rgba(201,162,39,0.06)"
+                      : "transparent",
+                }}
+              >
+                <span style={styles.controlTime}>{r.ora}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="—"
+                  value={r.bottiglieProdotte}
+                  onChange={(e) => update(i, { bottiglieProdotte: e.target.value })}
+                  style={{ ...styles.controlInput, width: "100%" }}
+                />
+                {["conformi", "nonConformi", "bidule"].map((c) => (
+                  <label key={c} style={{ ...styles.checkCell, width: "auto" }}>
+                    <input
+                      type="checkbox"
+                      checked={!!r[c]}
+                      onChange={(e) => update(i, { [c]: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                ))}
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="—"
+                  value={r.livello}
+                  onChange={(e) => update(i, { livello: e.target.value })}
+                  style={{ ...styles.controlInput, width: "100%" }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : imbottigliamento ? (
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableScrollX}>
+            <div
+              style={{
+                ...styles.controlTableHead,
+                ...styles.gridSemplice,
+                gridTemplateColumns: combinato
+                  ? "64px 76px 1fr 70px 70px 70px 70px 1fr repeat(6, 60px)"
+                  : "64px 76px 1fr 70px 70px 70px 70px 1fr",
+                minWidth: combinato ? 1120 : 760,
+              }}
+            >
+              <span>ora</span>
+              <span>bottiglie prodotte</span>
+              <span>filtrazione (bar ≤ 0,8)</span>
+              <span style={{ textAlign: "center" }}>verifica dosaggio</span>
+              <span style={{ textAlign: "center" }}>tappo raso</span>
+              <span style={{ textAlign: "center" }}>integr. tappo</span>
+              <span style={{ textAlign: "center" }}>presenza vuoto</span>
+              <span>livello riempimento (mm)</span>
+              {combinato &&
+                ["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map((c) => (
+                  <span key={c} style={{ textAlign: "center" }}>{c}</span>
+                ))}
+            </div>
+            {rows.map((r, i) => (
+              <div
+                key={r.ora}
+                style={{
+                  ...styles.controlRow,
+                  ...styles.gridSemplice,
+                  gridTemplateColumns: combinato
+                    ? "64px 76px 1fr 70px 70px 70px 70px 1fr repeat(6, 60px)"
+                    : "64px 76px 1fr 70px 70px 70px 70px 1fr",
+                  minWidth: combinato ? 1120 : 760,
+                  background:
+                    r.bottiglieProdotte !== "" || r.filtrazioneBar !== "" || r.livello !== ""
+                      ? "rgba(201,162,39,0.06)"
+                      : "transparent",
+                }}
+              >
+                <span style={styles.controlTime}>{r.ora}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="—"
+                  value={r.bottiglieProdotte}
+                  onChange={(e) => update(i, { bottiglieProdotte: e.target.value })}
+                  style={{ ...styles.controlInput, width: "100%" }}
+                />
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.1"
+                  placeholder="—"
+                  value={r.filtrazioneBar}
+                  onChange={(e) => update(i, { filtrazioneBar: e.target.value })}
+                  style={{ ...styles.controlInput, width: "100%" }}
+                />
+                {["verificaDosaggio", "tappoRaso", "integritaTappo", "presenzaVuoto"].map((c) => (
+                  <label key={c} style={{ ...styles.checkCell, width: "auto" }}>
+                    <input
+                      type="checkbox"
+                      checked={!!r[c]}
+                      onChange={(e) => update(i, { [c]: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                ))}
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="—"
+                  value={r.livello}
+                  onChange={(e) => update(i, { livello: e.target.value })}
+                  style={{ ...styles.controlInput, width: "100%" }}
+                />
+                {combinato &&
+                  ["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map((c) => (
+                    <label key={c} style={{ ...styles.checkCell, width: "auto" }}>
+                      <input
+                        type="checkbox"
+                        checked={!!r[c]}
+                        onChange={(e) => update(i, { [c]: e.target.checked })}
+                        style={styles.checkbox}
+                      />
+                    </label>
+                  ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : confezionamento ? (
+        <div style={styles.controlTableWrap}>
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
+            <span style={{ flex: 1, textAlign: "center" }}>capsula</span>
+            <span style={{ flex: 1, textAlign: "center" }}>fronte</span>
+            <span style={{ flex: 1, textAlign: "center" }}>retro</span>
+            <span style={{ flex: 1, textAlign: "center" }}>collare</span>
+            <span style={{ flex: 1, textAlign: "center" }}>fascetta</span>
+            <span style={{ flex: 1, textAlign: "center" }}>lotto</span>
           </div>
           {rows.map((r, i) => (
             <div
               key={r.ora}
               style={{
-                ...riga,
+                ...styles.controlRow,
                 background:
                   r.capsula || r.fronte || r.retro || r.collare || r.fascetta || r.lotto
                     ? "rgba(201,162,39,0.06)"
@@ -1065,11 +1530,11 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) =>
                   update(i, { bottiglieProdotte: e.target.value })
                 }
-                style={styles.controlInput}
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
               />
               {["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map(
                 (campo) => (
-                  <label key={campo} style={styles.checkCell}>
+                  <label key={campo} style={{ ...styles.checkCell, flex: 1 }}>
                     <input
                       type="checkbox"
                       checked={r[campo]}
@@ -1086,24 +1551,47 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
         // Sboccatura: ordine esatto richiesto — ora, bottiglie prodotte,
         // dosaggio liqueur, inserimento tappo, integrità tappo (flag),
         // posizionamento gabbietta (flag), livello riempimento.
+        // Griglia CSS a colonne fisse: stessa definizione per intestazione e
+        // righe, così le caselle non possono più finire sotto la colonna
+        // sbagliata (bug visto con flexbox).
         <div style={styles.controlTableWrap}>
-          <div style={head}>
-            <span style={styles.headCell}>ora</span>
-            <span style={styles.headCell}>bottiglie prodotte</span>
-            <span style={styles.headCell}>dosaggio liqueur (ml)</span>
-            <span style={styles.headCell}>inserimento tappo (mm)</span>
-            <span style={styles.headCellCenter}>integr. tappo</span>
-            <span style={styles.headCellCenter}>posiz. gabbietta</span>
-            <span style={styles.headCell}>livello riempimento (mm)</span>
-          </div>
-          {rows.map((r, i) => (
+          {/* Intestazione e righe scorrono INSIEME in orizzontale (un unico
+              contenitore con overflowX): su schermi stretti la tabella è più
+              larga della pagina, e senza questo le due parti possono
+              scrollare in modo indipendente/incoerente — è quello che
+              causava i flag che sembravano sotto la colonna sbagliata. */}
+          <div style={styles.controlTableScrollX}>
             <div
-              key={r.ora}
               style={{
-                ...riga,
-                background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
+                ...styles.controlTableHead,
+                ...styles.gridSemplice,
+                ...(combinato ? stileGrigliaCombinato : null),
+                minWidth: combinato ? 1060 : 660,
               }}
             >
+              <span>ora</span>
+              <span>bottiglie prodotte</span>
+              <span>dosaggio liqueur (ml)</span>
+              <span>inserimento tappo (mm)</span>
+              <span style={{ textAlign: "center" }}>integr. tappo</span>
+              <span style={{ textAlign: "center" }}>posiz. gabbietta</span>
+              <span>livello riempimento (mm)</span>
+              {combinato &&
+                ["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map((c) => (
+                  <span key={c} style={{ textAlign: "center" }}>{c}</span>
+                ))}
+            </div>
+            {rows.map((r, i) => (
+              <div
+                key={r.ora}
+                style={{
+                  ...styles.controlRow,
+                  ...styles.gridSemplice,
+                  ...(combinato ? stileGrigliaCombinato : null),
+                  minWidth: combinato ? 1060 : 660,
+                  background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
+                }}
+              >
               <span style={styles.controlTime}>{r.ora}</span>
               <input
                 type="number"
@@ -1113,7 +1601,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) =>
                   update(i, { bottiglieProdotte: e.target.value })
                 }
-                style={styles.controlInput}
+                style={{ ...styles.controlInput, width: "100%" }}
               />
               <input
                 type="number"
@@ -1121,7 +1609,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 placeholder="—"
                 value={r.dosaggio}
                 onChange={(e) => update(i, { dosaggio: e.target.value })}
-                style={styles.controlInput}
+                style={{ ...styles.controlInput, width: "100%" }}
               />
               <input
                 type="number"
@@ -1129,9 +1617,9 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 placeholder="—"
                 value={r.inserimentoTappo}
                 onChange={(e) => update(i, { inserimentoTappo: e.target.value })}
-                style={styles.controlInput}
+                style={{ ...styles.controlInput, width: "100%" }}
               />
-              <label style={styles.checkCell}>
+              <label style={{ ...styles.checkCell, width: "auto" }}>
                 <input
                   type="checkbox"
                   checked={r.integritaTappo}
@@ -1141,7 +1629,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                   style={styles.checkbox}
                 />
               </label>
-              <label style={styles.checkCell}>
+              <label style={{ ...styles.checkCell, width: "auto" }}>
                 <input
                   type="checkbox"
                   checked={r.posizionamentoGabbietta}
@@ -1157,31 +1645,43 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 placeholder="—"
                 value={r.livello}
                 onChange={(e) => update(i, { livello: e.target.value })}
-                style={styles.controlInput}
+                style={{ ...styles.controlInput, width: "100%" }}
               />
-            </div>
-          ))}
+              {combinato &&
+                ["capsula", "fronte", "retro", "collare", "fascetta", "lotto"].map((c) => (
+                  <label key={c} style={{ ...styles.checkCell, width: "auto" }}>
+                    <input
+                      type="checkbox"
+                      checked={!!r[c]}
+                      onChange={(e) => update(i, { [c]: e.target.checked })}
+                      style={styles.checkbox}
+                    />
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <div style={styles.controlTableWrap}>
-          <div style={head}>
-            <span style={styles.headCell}>ora</span>
-            <span style={styles.headCell}>bottiglie prodotte</span>
-            <span style={styles.headCell}>livello (mm)</span>
-            <span style={styles.headCell}>dosaggio (ml)</span>
-            <span style={styles.headCell}>inser. tappo (mm)</span>
-            <span style={styles.headCellCenter}>bidule</span>
-            <span style={styles.headCellCenter}>tappo</span>
-            <span style={styles.headCellCenter}>integr. tappo</span>
-            <span style={styles.headCellCenter}>
-              {tiraggio ? "posiz. bidule" : "gabbietta"}
+          <div style={styles.controlTableHead}>
+            <span style={{ width: 64 }}>ora</span>
+            <span style={{ width: 76 }}>bottiglie prodotte</span>
+            <span style={{ flex: 1 }}>livello (mm)</span>
+            <span style={{ flex: 1 }}>dosaggio (ml)</span>
+            <span style={{ flex: 1 }}>inser. tappo (mm)</span>
+            <span style={{ width: 76, textAlign: "center" }}>bidule</span>
+            <span style={{ width: 76, textAlign: "center" }}>tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>integr. tappo</span>
+            <span style={{ width: 76, textAlign: "center" }}>
+              {tiraggio ? "posiz. bidule" : vetri ? "vetri" : "gabbietta"}
             </span>
           </div>
           {rows.map((r, i) => (
             <div
               key={r.ora}
               style={{
-                ...riga,
+                ...styles.controlRow,
                 background: r.livello !== "" ? "rgba(201,162,39,0.06)" : "transparent",
               }}
             >
@@ -1194,7 +1694,7 @@ function ControlTable({ rows, onChange, tiraggio, confezionamento, semplice }) {
                 onChange={(e) =>
                   update(i, { bottiglieProdotte: e.target.value })
                 }
-                style={styles.controlInput}
+                style={{ ...styles.controlInput, width: 76, flex: "none" }}
               />
               <input
                 type="number"
@@ -1300,21 +1800,52 @@ function ArchivioRapportini({ onBack }) {
     };
   }, []);
 
-  const scarica = (riga) => {
+  // iPhone/iPad: un link "data:" con download non funziona (soprattutto con
+  // l'app installata sulla Home). Si crea quindi un vero file PDF (Blob) e,
+  // dove possibile, si apre il foglio di condivisione di iOS ("Salva su File",
+  // AirDrop, Mail…); altrimenti si apre il PDF in una scheda.
+  const scarica = async (riga) => {
     if (!riga.pdf_base64) return;
-    const link = document.createElement("a");
-    link.href = `data:application/pdf;base64,${riga.pdf_base64}`;
     const dataFile = riga.created_at
       ? new Date(riga.created_at).toISOString().slice(0, 10)
       : "rapportino";
-    link.download = `${(riga.cliente || "cliente")
+    const nomeFile = `${(riga.cliente || "cliente")
       .toLowerCase()
       .replace(/\s+/g, "-")}_${(riga.lavorazione || "rapportino")
       .toLowerCase()
       .replace(/\s+/g, "-")}_${dataFile}.pdf`;
+
+    let blob;
+    try {
+      const bin = atob(riga.pdf_base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      blob = new Blob([bytes], { type: "application/pdf" });
+    } catch (e) {
+      console.error("PDF non leggibile:", e);
+      return;
+    }
+
+    const file = new File([blob], nomeFile, { type: "application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: nomeFile });
+        return;
+      } catch (e) {
+        if (e && e.name === "AbortError") return; // l'utente ha chiuso il foglio
+      }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = nomeFile;
+    link.target = "_blank";
+    link.rel = "noopener";
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const righeFiltrate = righe.filter((r) => {
@@ -1331,8 +1862,8 @@ function ArchivioRapportini({ onBack }) {
   return (
     <div style={styles.formWrap}>
       <div style={styles.formHeader}>
-        <button onClick={onBack} style={styles.backBtn}>
-          ← home
+        <button onClick={onBack} style={styles.backBtnGrande}>
+          ← Torna alla home
         </button>
         <div style={styles.formTitleRow}>
           <h2 style={styles.formTitle}>Archivio rapportini</h2>
@@ -1428,6 +1959,8 @@ function CaricaManuale({ onBack }) {
     setEsito("");
     try {
       const pdfBase64 = await leggiFileComeBase64(file);
+      // Se il PDF è stato generato dall'app, ne leggo bottiglie e magnum
+      const quantita = leggiQuantitaDaPdf(pdfBase64);
       await conRiprovaDiRete(async () => {
         const { error } = await supabase.from("rapportini").insert({
           lavorazione,
@@ -1436,9 +1969,12 @@ function CaricaManuale({ onBack }) {
           operatore: operatoreRapportino,
           dettagli: `Data intervento: ${data || "—"} [caricato manualmente]`,
           pdf_base64: pdfBase64,
+          bottiglie: quantita ? quantita.bottiglie : null,
+          magnum: quantita ? quantita.magnum : null,
         });
         if (error) throw error;
       });
+      inviaNotificaArchiviazione({ cliente, lavorazione, operatore: operatoreRapportino });
       setEsito("ok");
       setCliente("");
       setVino("");
@@ -1568,7 +2104,535 @@ function CaricaManuale({ onBack }) {
   );
 }
 
-function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onCaricaManuale }) {
+// ---------------------------------------------------------------------------
+// Notifiche push — chi le riceve quando un rapportino viene archiviato.
+// ---------------------------------------------------------------------------
+const NOTIFICHE_A = ["Valentina Erović"];
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
+
+function urlBase64ToUint8Array(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+// Avvisa chi di dovere che un rapportino è stato archiviato.
+// Non blocca mai nulla: se non parte, il rapportino è comunque in archivio.
+function inviaNotificaArchiviazione({ cliente, lavorazione, operatore }) {
+  fetch("/.netlify/functions/invia-notifica", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cliente, lavorazione, operatore }),
+  }).catch((e) => console.error("Notifica non inviata:", e));
+}
+
+function PulsanteNotifiche({ operatore }) {
+  const [esito, setEsito] = useState("");
+
+  const attiva = async () => {
+    setEsito("");
+    try {
+      if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+        setEsito(
+          "Questo dispositivo non supporta le notifiche. Su iPhone/iPad l'app deve essere installata sulla schermata Home."
+        );
+        return;
+      }
+      if (!VAPID_PUBLIC_KEY) {
+        setEsito("Notifiche non ancora configurate sul server.");
+        return;
+      }
+      const permesso = await Notification.requestPermission();
+      if (permesso !== "granted") {
+        setEsito("Permesso negato: abilita le notifiche per l'app dalle impostazioni del dispositivo.");
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+      }
+      const json = sub.toJSON();
+      const { error } = await supabase
+        .from("push_subscriptions")
+        .upsert({ operatore, endpoint: json.endpoint, subscription: json }, { onConflict: "endpoint" });
+      if (error) throw error;
+      setEsito("Notifiche attive su questo dispositivo.");
+    } catch (e) {
+      console.error("Errore attivazione notifiche:", e);
+      setEsito("Non sono riuscito ad attivare le notifiche. Riprova.");
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <button onClick={attiva} style={styles.archivioBtn}>
+        🔔 Attiva notifiche rapportini
+      </button>
+      {esito && (
+        <div style={{ fontSize: 12.5, color: COLORS.textMuted, marginTop: 6 }}>{esito}</div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Contatore bottiglie — visibile solo a Stefano Gerardi.
+// Bottiglie e Magnum sono sempre conteggiate separatamente.
+// ---------------------------------------------------------------------------
+const CONTATORE_VISIBILE_A = ["Stefano Gerardi"];
+
+const numeroIntero = (v) => parseInt(String(v ?? "").replace(/[^\d]/g, ""), 10) || 0;
+const formatoNumero = (n) => (n || 0).toLocaleString("it-IT");
+
+// Somma Bottiglia e Magnum di tutti i vini del rapportino (separatamente).
+function contaQuantita(prodotti) {
+  let bottiglie = 0;
+  let magnum = 0;
+  (prodotti || []).forEach((p) => {
+    bottiglie += numeroIntero(p.bottiglieFatte);
+    magnum += numeroIntero(p.qtaMagnum);
+  });
+  return { bottiglie, magnum };
+}
+
+// Legge dal PDF già generato la tabella "Quantità bottiglie fatte".
+// Ritorna { bottiglie, magnum } oppure null se non la trova.
+function leggiQuantitaDaPdf(pdfBase64) {
+  try {
+    const testo = atob(pdfBase64);
+    const voci = [];
+    const re = /\(((?:\\.|[^\\)])*)\)\s*Tj/g;
+    let m;
+    while ((m = re.exec(testo)) !== null) {
+      voci.push(m[1].replace(/\\([()\\])/g, "$1"));
+    }
+    const i = voci.findIndex(
+      (v, k) =>
+        v === "Vino" &&
+        voci[k + 1] === "Bottiglia" &&
+        voci[k + 2] === "Magnum" &&
+        voci[k + 3] === "Altro"
+    );
+    if (i < 0) return null;
+    let bottiglie = 0;
+    let magnum = 0;
+    let j = i + 4;
+    while (j + 3 < voci.length && /^Vino \d+/.test(voci[j])) {
+      bottiglie += numeroIntero(voci[j + 1]);
+      magnum += numeroIntero(voci[j + 2]);
+      j += 4;
+    }
+    return { bottiglie, magnum };
+  } catch (e) {
+    return null;
+  }
+}
+
+function ContatoreBottiglie({ onBack }) {
+  const [righe, setRighe] = useState([]);
+  const [stato, setStato] = useState("carico"); // carico | ok | errore
+  const [analisi, setAnalisi] = useState(null); // null | { lavorando, elenco }
+  const [esito, setEsito] = useState("");
+  // Data dell'ultimo reset: i contatori sommano solo i rapportini chiusi dopo.
+  // Il reset non cancella nulla dall'archivio, segna solo da quando si riparte.
+  const [ultimoReset, setUltimoReset] = useState(null);
+  // Categoria aperta per vedere i parziali per operatore
+  const [categoriaAperta, setCategoriaAperta] = useState(null);
+
+  // Le versioni Hub e le combinate ("... + Confezionamento") contano nelle
+  // categorie di base (vedi lavorazioneBase), quindi non hanno una riga propria.
+  const categorie = LAVORAZIONI.filter(
+    (l) => HAS_FULL_MASK.has(l.id) && !l.hub && !l.id.includes("-confezionamento")
+  );
+
+  const carica = () => {
+    setStato("carico");
+    conRiprovaDiRete(async () => {
+      const { data, error } = await supabase
+        .from("rapportini")
+        .select("id, cliente, operatore, lavorazione, created_at, bottiglie, magnum");
+      if (error) throw error;
+      const { data: reset } = await supabase
+        .from("contatore_reset")
+        .select("data")
+        .order("data", { ascending: false })
+        .limit(1);
+      return { data, reset: reset && reset[0] ? reset[0].data : null };
+    })
+      .then(({ data, reset }) => {
+        setRighe(data || []);
+        setUltimoReset(reset ? new Date(reset) : null);
+        setStato("ok");
+      })
+      .catch((e) => {
+        console.error("Errore lettura contatori:", e.message);
+        setStato("errore");
+      });
+  };
+
+  useEffect(carica, []);
+
+  const dopoReset = (r) =>
+    !ultimoReset || (r.created_at && new Date(r.created_at) >= ultimoReset);
+
+  const resetta = async () => {
+    if (
+      !window.confirm(
+        "Azzerare i contatori? Ripartono da zero da adesso. I rapportini in archivio restano intatti."
+      )
+    )
+      return;
+    try {
+      await conRiprovaDiRete(async () => {
+        const { error } = await supabase
+          .from("contatore_reset")
+          .insert({ data: new Date().toISOString() });
+        if (error) throw error;
+      });
+      setEsito("Contatori azzerati.");
+      setAnalisi(null);
+      carica();
+    } catch (e) {
+      console.error("Errore reset contatore:", e);
+      setEsito("Reset non riuscito: controlla la connessione e riprova.");
+    }
+  };
+
+  const perCategoria = categorie.map((c) => {
+    const mie = righe.filter(
+      (r) =>
+        lavorazioneBase(r.lavorazione) === c.label &&
+        r.bottiglie !== null &&
+        r.bottiglie !== undefined &&
+        dopoReset(r)
+    );
+    return {
+      ...c,
+      bottiglie: mie.reduce((s, r) => s + (r.bottiglie || 0), 0),
+      magnum: mie.reduce((s, r) => s + (r.magnum || 0), 0),
+      rapportini: mie.length,
+      perOperatore: Object.values(
+        mie.reduce((acc, r) => {
+          const nome = r.operatore || "Operatore non indicato";
+          acc[nome] = acc[nome] || { nome, bottiglie: 0, magnum: 0, rapportini: 0 };
+          acc[nome].bottiglie += r.bottiglie || 0;
+          acc[nome].magnum += r.magnum || 0;
+          acc[nome].rapportini += 1;
+          return acc;
+        }, {})
+      ).sort((a, b) => b.bottiglie + b.magnum - (a.bottiglie + a.magnum)),
+    };
+  });
+  const totBottiglie = perCategoria.reduce((s, c) => s + c.bottiglie, 0);
+  const totMagnum = perCategoria.reduce((s, c) => s + c.magnum, 0);
+
+  const etichetteCategorie = categorie.map((c) => c.label);
+  const daRecuperare = righe.filter(
+    (r) =>
+      etichetteCategorie.includes(lavorazioneBase(r.lavorazione)) &&
+      (r.bottiglie === null || r.bottiglie === undefined) &&
+      dopoReset(r)
+  );
+
+  const analizza = async () => {
+    setEsito("");
+    const elenco = [];
+    setAnalisi({ lavorando: true, elenco: [] });
+    for (const r of daRecuperare) {
+      try {
+        const pdf = await conRiprovaDiRete(async () => {
+          const { data, error } = await supabase
+            .from("rapportini")
+            .select("pdf_base64")
+            .eq("id", r.id)
+            .single();
+          if (error) throw error;
+          return data?.pdf_base64;
+        });
+        const q = pdf ? leggiQuantitaDaPdf(pdf) : null;
+        elenco.push({
+          id: r.id,
+          cliente: r.cliente,
+          lavorazione: r.lavorazione,
+          data: r.created_at ? new Date(r.created_at).toLocaleDateString("it-IT") : "",
+          bottiglie: q ? String(q.bottiglie) : "",
+          magnum: q ? String(q.magnum) : "",
+          daVerificare: !q,
+        });
+      } catch (e) {
+        elenco.push({
+          id: r.id,
+          cliente: r.cliente,
+          lavorazione: r.lavorazione,
+          data: "",
+          bottiglie: "",
+          magnum: "",
+          daVerificare: true,
+        });
+      }
+      setAnalisi({ lavorando: true, elenco: [...elenco] });
+    }
+    setAnalisi({ lavorando: false, elenco });
+  };
+
+  const modificaVoce = (id, campo, valore) =>
+    setAnalisi((a) => ({
+      ...a,
+      elenco: a.elenco.map((v) => (v.id === id ? { ...v, [campo]: valore } : v)),
+    }));
+
+  const salvaRecupero = async () => {
+    let ok = 0;
+    let errori = 0;
+    for (const v of analisi.elenco) {
+      if (v.bottiglie === "" && v.magnum === "") continue; // lasciato da parte
+      try {
+        await conRiprovaDiRete(async () => {
+          const { error } = await supabase
+            .from("rapportini")
+            .update({
+              bottiglie: numeroIntero(v.bottiglie),
+              magnum: numeroIntero(v.magnum),
+            })
+            .eq("id", v.id);
+          if (error) throw error;
+        });
+        ok++;
+      } catch (e) {
+        console.error("Errore salvataggio recupero:", e);
+        errori++;
+      }
+    }
+    setEsito(
+      errori
+        ? `Salvati ${ok}, non riusciti ${errori}. Controlla la connessione e i permessi della tabella.`
+        : `Salvati ${ok} rapportini.`
+    );
+    setAnalisi(null);
+    carica();
+  };
+
+  const numStyle = { fontFamily: FONT_MONO, color: COLORS.text };
+
+  return (
+    <div style={styles.formWrap}>
+      <div style={styles.formHeader}>
+        <button onClick={onBack} style={styles.backBtnGrande}>
+          ← Torna alla home
+        </button>
+        <div style={styles.formTitleRow}>
+          <h2 style={styles.formTitle}>Contatore bottiglie</h2>
+        </div>
+      </div>
+
+      {stato === "carico" && <p style={styles.saveHint}>Caricamento…</p>}
+      {stato === "errore" && (
+        <p style={{ ...styles.saveHint, color: "#D98F7A" }}>
+          Non riesco a leggere i dati. Controlla la connessione e riprova.
+        </p>
+      )}
+
+      {stato === "ok" && (
+        <>
+          <div
+            style={{
+              background: COLORS.surfaceRaised,
+              border: `1.5px solid ${COLORS.gold}`,
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 14,
+            }}
+          >
+            <div style={{ fontSize: 12, letterSpacing: 1, textTransform: "uppercase", color: COLORS.textMuted, textAlign: "center" }}>
+              Totale
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-around", marginTop: 8 }}>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ ...numStyle, fontSize: 34, color: COLORS.gold }}>{formatoNumero(totBottiglie)}</div>
+                <div style={{ fontSize: 12, color: COLORS.textMuted }}>bottiglie</div>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <div style={{ ...numStyle, fontSize: 34, color: COLORS.gold }}>{formatoNumero(totMagnum)}</div>
+                <div style={{ fontSize: 12, color: COLORS.textMuted }}>magnum</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {perCategoria.map((c) => (
+              <div
+                key={c.id}
+                onClick={() =>
+                  setCategoriaAperta((a) => (a === c.id ? null : c.id))
+                }
+                style={{
+                  background: COLORS.surface,
+                  border: `1px solid ${categoriaAperta === c.id ? COLORS.gold : COLORS.border}`,
+                  borderRadius: 10,
+                  padding: 14,
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: COLORS.gold }}>{c.cifra}</div>
+                <div style={{ fontSize: 14, margin: "2px 0 8px" }}>{c.label}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                  <span style={{ fontSize: 12, color: COLORS.textMuted }}>bottiglie</span>
+                  <span style={{ ...numStyle, fontSize: 20 }}>{formatoNumero(c.bottiglie)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 4 }}>
+                  <span style={{ fontSize: 12, color: COLORS.textMuted }}>magnum</span>
+                  <span style={{ ...numStyle, fontSize: 20 }}>{formatoNumero(c.magnum)}</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: COLORS.textMuted, marginTop: 6 }}>
+                  {c.rapportini} rapportini · tocca per i parziali
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {categoriaAperta &&
+            (() => {
+              const c = perCategoria.find((x) => x.id === categoriaAperta);
+              if (!c) return null;
+              return (
+                <div
+                  style={{
+                    marginTop: 12,
+                    background: COLORS.surfaceRaised,
+                    border: `1px solid ${COLORS.gold}`,
+                    borderRadius: 10,
+                    padding: 14,
+                  }}
+                >
+                  <div style={{ fontSize: 14, marginBottom: 8 }}>
+                    {c.label} — parziali per operatore
+                  </div>
+                  {c.perOperatore.length === 0 && (
+                    <div style={{ fontSize: 13, color: COLORS.textMuted }}>
+                      Nessun rapportino dopo l'ultimo reset.
+                    </div>
+                  )}
+                  {c.perOperatore.map((o) => (
+                    <div
+                      key={o.nome}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "baseline",
+                        gap: 8,
+                        padding: "8px 0",
+                        borderTop: `1px solid ${COLORS.border}`,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div>
+                        <div>{o.nome}</div>
+                        <div style={{ fontSize: 11.5, color: COLORS.textMuted }}>
+                          {o.rapportini} rapportini
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", fontFamily: FONT_MONO }}>
+                        <div>{formatoNumero(o.bottiglie)} bottiglie</div>
+                        <div>{formatoNumero(o.magnum)} magnum</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+            <button onClick={resetta} style={styles.homeBtnDanger}>
+              Reset contatore
+            </button>
+            <span style={{ fontSize: 12, color: COLORS.textMuted }}>
+              {ultimoReset
+                ? `ultimo reset il ${ultimoReset.toLocaleDateString("it-IT")}`
+                : "ultimo reset: mai effettuato"}
+            </span>
+          </div>
+
+          {esito && <p style={{ ...styles.saveHint, marginTop: 14 }}>{esito}</p>}
+
+          {daRecuperare.length > 0 && (
+            <div style={{ marginTop: 26, borderTop: `1px solid ${COLORS.border}`, paddingTop: 16 }}>
+              <h3 style={{ fontSize: 15, margin: "0 0 6px" }}>Recupero storico</h3>
+              <p style={{ fontSize: 13, color: COLORS.textMuted, lineHeight: 1.5, margin: "0 0 12px" }}>
+                {daRecuperare.length} rapportini in archivio non hanno ancora i numeri di bottiglie e magnum. Posso leggerli dai loro PDF: controlli i valori, correggi se serve e confermi.
+              </p>
+              {!analisi && (
+                <button onClick={analizza} style={styles.saveBtn}>
+                  Leggi i PDF archiviati
+                </button>
+              )}
+              {analisi && (
+                <>
+                  {analisi.lavorando && (
+                    <p style={styles.saveHint}>
+                      Lettura in corso… {analisi.elenco.length}/{daRecuperare.length}
+                    </p>
+                  )}
+                  {analisi.elenco.map((v) => (
+                    <div
+                      key={v.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "9px 0",
+                        borderBottom: `1px solid ${COLORS.border}`,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div>{v.cliente}</div>
+                        <div style={{ fontSize: 11.5, color: COLORS.textMuted }}>
+                          {v.lavorazione} · {v.data}
+                          {v.daVerificare && (
+                            <b style={{ color: COLORS.gold }}> · da verificare</b>
+                          )}
+                        </div>
+                      </div>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        placeholder="bott."
+                        value={v.bottiglie}
+                        onChange={(e) => modificaVoce(v.id, "bottiglie", e.target.value)}
+                        style={{ ...styles.input, width: 78, textAlign: "right", padding: "7px" }}
+                      />
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        placeholder="magn."
+                        value={v.magnum}
+                        onChange={(e) => modificaVoce(v.id, "magnum", e.target.value)}
+                        style={{ ...styles.input, width: 78, textAlign: "right", padding: "7px" }}
+                      />
+                    </div>
+                  ))}
+                  {!analisi.lavorando && (
+                    <button onClick={salvaRecupero} style={{ ...styles.saveBtn, marginTop: 14 }}>
+                      Conferma e salva
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onCaricaManuale, onContatore, onGestionePin }) {
   const isAdmin = AMMINISTRATORI.includes(operatore);
   const [conteggioArchivio, setConteggioArchivio] = useState(null);
 
@@ -1625,6 +2689,8 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onC
         </div>
       )}
 
+      {NOTIFICHE_A.includes(operatore) && <PulsanteNotifiche operatore={operatore} />}
+
       {isAdmin && (
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button onClick={onArchivio} style={styles.archivioBtn}>
@@ -1632,6 +2698,14 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onC
           </button>
           <button onClick={onCaricaManuale} style={styles.archivioBtn}>
             ⬆️ Carica rapportino (PDF)
+          </button>
+          {CONTATORE_VISIBILE_A.includes(operatore) && (
+            <button onClick={onContatore} style={styles.archivioBtn}>
+              🔢 Contatore bottiglie
+            </button>
+          )}
+          <button onClick={onGestionePin} style={styles.archivioBtn}>
+            🔑 Gestione PIN
           </button>
         </div>
       )}
@@ -1707,25 +2781,187 @@ function clearOperatoreSessione() {
 }
 
 // ---------------------------------------------------------------------------
+// PIN personali — dopo il primo accesso ognuno sceglie il proprio PIN.
+// Salvati su Supabase (tabella pin_operatori) solo come impronta cifrata
+// (SHA-256 con nome operatore), mai in chiaro. Finché un operatore non ha
+// cambiato PIN vale quello iniziale scritto in OPERATORI.
+// ---------------------------------------------------------------------------
+async function impronta(nome, pin) {
+  const dati = new TextEncoder().encode(`rapportini-os|${nome}|${pin}`);
+  const h = await crypto.subtle.digest("SHA-256", dati);
+  return Array.from(new Uint8Array(h))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// Esito: "ok" | "cambia" (PIN iniziale/provvisorio, va scelto il nuovo) |
+// "errato" | "rete"
+async function verificaPin(nome, pin) {
+  const p = String(pin || "").trim();
+  if (PROFILI_PIN_FISSO.includes(nome)) {
+    const fisso = OPERATORI.find((o) => o.nome === nome);
+    return fisso && fisso.pin === p ? "ok" : "errato";
+  }
+  try {
+    const riga = await conRiprovaDiRete(async () => {
+      const { data, error } = await supabase
+        .from("pin_operatori")
+        .select("pin_hash, provvisorio")
+        .eq("nome", nome)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    });
+    if (riga) {
+      const h = await impronta(nome, p);
+      if (h !== riga.pin_hash) return "errato";
+      return riga.provvisorio ? "cambia" : "ok";
+    }
+    // Nessun PIN personale ancora: vale quello iniziale
+    const op = OPERATORI.find((o) => o.nome === nome);
+    return op && op.pin === p ? "cambia" : "errato";
+  } catch (e) {
+    console.error("Verifica PIN non riuscita:", e);
+    return "rete";
+  }
+}
+
+async function salvaPin(nome, pin, provvisorio) {
+  const h = await impronta(nome, pin);
+  await conRiprovaDiRete(async () => {
+    const { error } = await supabase.from("pin_operatori").upsert({
+      nome,
+      pin_hash: h,
+      provvisorio: !!provvisorio,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+  });
+}
+
+// Schermata "Scegli il tuo PIN" (primo accesso o dopo un reset)
+function CambioPin({ nome, pinAttuale, onFatto, onAnnulla }) {
+  const [nuovo, setNuovo] = useState("");
+  const [ripeti, setRipeti] = useState("");
+  const [errore, setErrore] = useState("");
+  const [salvo, setSalvo] = useState(false);
+
+  const conferma = async (e) => {
+    e.preventDefault();
+    if (!/^\d{4}$/.test(nuovo)) return setErrore("Il PIN deve essere di 4 cifre.");
+    if (nuovo === String(pinAttuale).trim())
+      return setErrore("Scegli un PIN diverso da quello provvisorio.");
+    if (nuovo !== ripeti) return setErrore("I due PIN non coincidono.");
+    setErrore("");
+    setSalvo(true);
+    try {
+      await salvaPin(nome, nuovo, false);
+      onFatto();
+    } catch (err) {
+      console.error("Salvataggio PIN non riuscito:", err);
+      setSalvo(false);
+      setErrore("Non sono riuscito a salvare il PIN: controlla la connessione e riprova.");
+    }
+  };
+
+  return (
+    <div style={styles.loginWrap}>
+      <img src={oenoLogo} alt="Oeno Soluzioni" style={styles.loginLogo} />
+      <h1 style={styles.brandTitle}>Scegli il tuo PIN</h1>
+      <p style={styles.brandSub}>
+        È il tuo primo accesso: scegli un PIN personale di 4 cifre. Da ora in poi userai solo questo.
+      </p>
+      <form onSubmit={conferma} style={styles.loginForm}>
+        <Field label="Nuovo PIN">
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={4}
+            style={styles.input}
+            value={nuovo}
+            onChange={(e) => setNuovo(e.target.value)}
+            placeholder="4 cifre"
+          />
+        </Field>
+        <Field label="Ripeti il nuovo PIN">
+          <input
+            type="password"
+            inputMode="numeric"
+            maxLength={4}
+            style={styles.input}
+            value={ripeti}
+            onChange={(e) => setRipeti(e.target.value)}
+            placeholder="4 cifre"
+          />
+        </Field>
+        {errore && <div style={styles.loginError}>{errore}</div>}
+        <button type="submit" style={styles.saveBtn} disabled={salvo || !nuovo || !ripeti}>
+          {salvo ? "Salvo…" : "Salva ed entra"}
+        </button>
+        <button type="button" onClick={onAnnulla} style={styles.linkBtn}>
+          ← torna all'accesso
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Login — nome operatore + PIN personale
 // ---------------------------------------------------------------------------
 function Login({ onLogin }) {
   const [nome, setNome] = useState("");
   const [pin, setPin] = useState("");
   const [errore, setErrore] = useState("");
+  const [verifica, setVerifica] = useState(false);
+  const [cambio, setCambio] = useState(false);
+  const [dimenticato, setDimenticato] = useState(false);
 
-  const entra = (e) => {
+  const entra = async (e) => {
     e.preventDefault();
-    const trovato = OPERATORI.find(
-      (o) => o.nome === nome && o.pin === pin.trim()
-    );
-    if (trovato) {
-      setErrore("");
-      onLogin(trovato.nome);
-    } else {
-      setErrore("PIN non corretto per l'operatore selezionato");
-    }
+    setErrore("");
+    setVerifica(true);
+    const esito = await verificaPin(nome, pin);
+    setVerifica(false);
+    if (esito === "ok") onLogin(nome);
+    else if (esito === "cambia") setCambio(true);
+    else if (esito === "rete")
+      setErrore("Nessuna connessione: per accedere serve la rete. Riprova tra poco.");
+    else setErrore("PIN non corretto per l'operatore selezionato");
   };
+
+  if (cambio) {
+    return (
+      <CambioPin
+        nome={nome}
+        pinAttuale={pin}
+        onFatto={() => onLogin(nome)}
+        onAnnulla={() => {
+          setCambio(false);
+          setPin("");
+        }}
+      />
+    );
+  }
+
+  if (dimenticato) {
+    return (
+      <div style={styles.loginWrap}>
+        <img src={oenoLogo} alt="Oeno Soluzioni" style={styles.loginLogo} />
+        <h1 style={styles.brandTitle}>PIN dimenticato</h1>
+        <p style={styles.brandSub}>
+          Per sicurezza il PIN non si può reimpostare da soli. Chiedi a uno degli
+          amministratori ({AMMINISTRATORI.join(", ")}): ti darà un PIN provvisorio
+          e al prossimo accesso ne sceglierai uno nuovo.
+        </p>
+        <div style={styles.loginForm}>
+          <button type="button" style={styles.saveBtn} onClick={() => setDimenticato(false)}>
+            ← Torna all'accesso
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.loginWrap}>
@@ -1759,10 +2995,124 @@ function Login({ onLogin }) {
           />
         </Field>
         {errore && <div style={styles.loginError}>{errore}</div>}
-        <button type="submit" style={styles.saveBtn} disabled={!nome || !pin}>
-          Entra
+        <button type="submit" style={styles.saveBtn} disabled={!nome || !pin || verifica}>
+          {verifica ? "Controllo…" : "Entra"}
+        </button>
+        <button type="button" onClick={() => setDimenticato(true)} style={styles.linkBtn}>
+          Ho dimenticato il PIN
         </button>
       </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Gestione PIN — solo amministratori: imposta un PIN provvisorio a chi ha
+// dimenticato il suo; al prossimo accesso la persona ne sceglie uno nuovo.
+// ---------------------------------------------------------------------------
+function GestionePin({ onBack }) {
+  const [stati, setStati] = useState({}); // nome -> "personale" | "provvisorio"
+  const [caricato, setCaricato] = useState(false);
+  const [scelto, setScelto] = useState(null);
+  const [tmp, setTmp] = useState("");
+  const [esito, setEsito] = useState("");
+
+  const carica = () => {
+    conRiprovaDiRete(async () => {
+      const { data, error } = await supabase
+        .from("pin_operatori")
+        .select("nome, provvisorio");
+      if (error) throw error;
+      return data;
+    })
+      .then((data) => {
+        const m = {};
+        (data || []).forEach((r) => {
+          m[r.nome] = r.provvisorio ? "provvisorio" : "personale";
+        });
+        setStati(m);
+        setCaricato(true);
+      })
+      .catch(() => setCaricato(true));
+  };
+  useEffect(carica, []);
+
+  const imposta = async () => {
+    if (!/^\d{4}$/.test(tmp)) return setEsito("Il PIN provvisorio deve essere di 4 cifre.");
+    try {
+      await salvaPin(scelto, tmp, true);
+      setEsito(
+        `Fatto. Comunica il PIN provvisorio a ${scelto}: al prossimo accesso dovrà sceglierne uno nuovo.`
+      );
+      setTmp("");
+      carica();
+    } catch (e) {
+      setEsito("Non riuscito: controlla la connessione e riprova.");
+    }
+  };
+
+  const etichetta = (nome) =>
+    stati[nome] === "personale"
+      ? "PIN personale"
+      : stati[nome] === "provvisorio"
+      ? "PIN provvisorio da cambiare"
+      : "PIN iniziale, primo accesso da fare";
+
+  return (
+    <div style={styles.formWrap}>
+      <div style={styles.formHeader}>
+        <button onClick={onBack} style={styles.backBtnGrande}>
+          ← Torna alla home
+        </button>
+        <div style={styles.formTitleRow}>
+          <h2 style={styles.formTitle}>Gestione PIN</h2>
+        </div>
+      </div>
+      <p style={{ color: COLORS.textMuted, fontSize: 13, lineHeight: 1.5 }}>
+        Se un operatore ha dimenticato il PIN, imposta un PIN provvisorio: al
+        prossimo accesso dovrà sceglierne uno nuovo.
+      </p>
+      {!caricato && <p style={{ color: COLORS.textMuted }}>Carico…</p>}
+      <div style={styles.archivioList}>
+        {OPERATORI.filter((o) => !PROFILI_PIN_FISSO.includes(o.nome)).map((o) => (
+          <div key={o.nome} style={styles.archivioRow}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={styles.archivioCliente}>{o.nome}</div>
+              <div style={styles.archivioMeta}>{etichetta(o.nome)}</div>
+            </div>
+            <button
+              onClick={() => {
+                setScelto(o.nome);
+                setTmp("");
+                setEsito("");
+              }}
+              style={styles.homeBtn}
+            >
+              Reset PIN
+            </button>
+          </div>
+        ))}
+      </div>
+      {scelto && (
+        <div style={{ ...styles.noteBlock, border: `1px solid ${COLORS.gold}`, borderRadius: 10, padding: 14 }}>
+          <div style={{ marginBottom: 8 }}>Reset PIN di {scelto}</div>
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={4}
+            style={styles.input}
+            value={tmp}
+            onChange={(e) => setTmp(e.target.value)}
+            placeholder="PIN provvisorio (4 cifre)"
+          />
+          <button onClick={imposta} style={{ ...styles.saveBtn, marginTop: 10 }}>
+            Imposta PIN provvisorio
+          </button>
+          {esito && (
+            <div style={{ marginTop: 10, fontSize: 13, color: COLORS.gold }}>{esito}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1796,10 +3146,70 @@ function clearDraft(lavorazioneId) {
   }
 }
 
+// --- Bozze nel cloud (Supabase, tabella "bozze") ---------------------------
+// La bozza resta salvata anche sul dispositivo; la copia nel cloud, legata al
+// nome dell'operatore, permette di riprenderla da un altro dispositivo.
+async function salvaBozzaCloud(operatore, lavorazioneId, dati) {
+  try {
+    await supabase.from("bozze").upsert(
+      {
+        operatore,
+        lavorazione_id: lavorazioneId,
+        dati,
+        updated_at: dati._updatedAt,
+      },
+      { onConflict: "operatore,lavorazione_id" }
+    );
+  } catch (e) {
+    /* offline: resta la copia locale */
+  }
+}
+
+async function caricaBozzaCloud(operatore, lavorazioneId) {
+  try {
+    const richiesta = supabase
+      .from("bozze")
+      .select("dati, updated_at")
+      .eq("operatore", operatore)
+      .eq("lavorazione_id", lavorazioneId)
+      .maybeSingle();
+    const scadenza = new Promise((ok) => setTimeout(() => ok({ timeout: true }), 6000));
+    const r = await Promise.race([richiesta, scadenza]);
+    if (!r || r.timeout || r.error || !r.data) return null;
+    return r.data;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function cancellaBozzaCloud(operatore, lavorazioneId) {
+  try {
+    await supabase
+      .from("bozze")
+      .delete()
+      .eq("operatore", operatore)
+      .eq("lavorazione_id", lavorazioneId);
+  } catch (e) {
+    /* ignora */
+  }
+}
+
 // ---------------------------------------------------------------------------
 function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const lav = LAVORAZIONI.find((l) => l.id === lavorazioneId);
   const full = HAS_FULL_MASK.has(lavorazioneId);
+  // Le versioni "Hub" hanno la stessa maschera della lavorazione di base ma
+  // mail di invio fisse (HUB_DESTINATARI) invece di quelle del cliente.
+  const tipo = lavorazioneId.replace(/-hub$/, "");
+  const isHub = tipo !== lavorazioneId;
+  // "Sboccatura + Confezionamento Hub": struttura di Sboccatura con in più i
+  // controlli di Confezionamento (incartonamento, 6 spunte di linea, ecc.)
+  const combo = tipo === "sboccatura-confezionamento";
+  // "Imbottigliamento + Confezionamento": struttura di Imbottigliamento con in
+  // più i controlli di Confezionamento. `tb` = tipo "di base" per le parti
+  // dell'Imbottigliamento (vetri, servizi accessori, controlli di linea...).
+  const comboImb = tipo === "imbottigliamento-confezionamento";
+  const tb = comboImb ? "imbottigliamento" : tipo;
   const bozzaIniziale = loadDraft(lavorazioneId);
 
   const [form, setForm] = useState(
@@ -1831,14 +3241,103 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
   const [altriOperatori, setAltriOperatori] = useState(
     bozzaIniziale?.altriOperatori || ""
   );
+  // Solo Hub: tabella ore per operatore (il primo è chi compila), max 4 nomi
+  const [oreOperatori, setOreOperatori] = useState(
+    bozzaIniziale?.oreOperatori?.length
+      ? bozzaIniziale.oreOperatori
+      : [{ nome: operatore || "", ore: "" }]
+  );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [bozzaRipristinata] = useState(!!bozzaIniziale);
+  // Avviso non bloccante: l'intervento è già in archivio e scaricato quando
+  // compare, quindi non impedisce nulla — segnala solo che la mail al
+  // cliente non è partita (es. nessuna email nota o funzione non raggiungibile).
+  const [emailWarning, setEmailWarning] = useState("");
+  const [bozzaRipristinata, setBozzaRipristinata] = useState(!!bozzaIniziale);
 
-  // Salva automaticamente la bozza a ogni modifica (nessuna connessione richiesta)
+  // Bozza nel cloud: all'apertura si controlla se ce n'è una più recente di
+  // quella del dispositivo (es. iniziata da un altro dispositivo).
+  const [bozzaPronta, setBozzaPronta] = useState(false);
+  const bozzaChiusa = useRef(false); // true dopo invio o cancellazione
+  const ultimoPayload = useRef(null);
+  const formVuoto = useRef(JSON.stringify(formConDefaultSicuri(null, full)));
+  // Una bozza ancora in bianco non va mandata nel cloud
+  const èVuota = (d) =>
+    JSON.stringify(d.form) === formVuoto.current &&
+    !d.firmaOperatore &&
+    !d.firmaCliente &&
+    !d.nomeCliente &&
+    !d.emailAggiuntiva &&
+    !d.oraInizio &&
+    !d.oraFine &&
+    !d.oreViaggioAndata &&
+    !d.oreViaggioRitorno &&
+    !d.altriOperatori &&
+    !(d.oreOperatori || []).some((o, i) => o.ore || (i > 0 && o.nome));
+
   useEffect(() => {
-    saveDraft(lavorazioneId, {
+    let annullato = false;
+    caricaBozzaCloud(operatore, lavorazioneId).then((cloud) => {
+      if (annullato) return;
+      if (cloud && cloud.dati) {
+        const localeQuando = bozzaIniziale?._updatedAt
+          ? new Date(bozzaIniziale._updatedAt).getTime()
+          : 0;
+        const cloudQuando = new Date(cloud.updated_at).getTime();
+        if (cloudQuando > localeQuando) {
+          const d = cloud.dati;
+          setForm(formConDefaultSicuri(d.form, full));
+          setFirmaOperatore(d.firmaOperatore || "");
+          setFirmaCliente(d.firmaCliente || "");
+          setNomeOperatore(d.nomeOperatore || operatore || "");
+          setNomeCliente(d.nomeCliente || "");
+          setEmailAggiuntiva(d.emailAggiuntiva || "");
+          setOraInizio(d.oraInizio || "");
+          setOraFine(d.oraFine || "");
+          setOreViaggioAndata(d.oreViaggioAndata || "");
+          setOreViaggioRitorno(d.oreViaggioRitorno || "");
+          setAltriOperatori(d.altriOperatori || "");
+          setOreOperatori(
+            d.oreOperatori?.length
+              ? d.oreOperatori
+              : [{ nome: operatore || "", ore: "" }]
+          );
+          setBozzaRipristinata(true);
+        }
+      }
+      setBozzaPronta(true);
+    });
+    return () => {
+      annullato = true;
+    };
+  }, []);
+
+  // Chiude la bozza (rapportino inviato o cancellato): via dal dispositivo e dal cloud
+  const chiudiBozza = () => {
+    bozzaChiusa.current = true;
+    clearDraft(lavorazioneId);
+    cancellaBozzaCloud(operatore, lavorazioneId);
+  };
+
+  // Uscendo dal modulo si manda subito al cloud l'ultima versione
+  useEffect(() => {
+    return () => {
+      if (
+        !bozzaChiusa.current &&
+        ultimoPayload.current &&
+        !èVuota(ultimoPayload.current)
+      ) {
+        salvaBozzaCloud(operatore, lavorazioneId, ultimoPayload.current);
+      }
+    };
+  }, []);
+
+  // Salva automaticamente la bozza a ogni modifica: subito sul dispositivo
+  // (nessuna connessione richiesta), dopo 2 secondi anche nel cloud.
+  useEffect(() => {
+    if (!bozzaPronta || bozzaChiusa.current) return;
+    const dati = {
       form,
       firmaOperatore,
       firmaCliente,
@@ -1850,8 +3349,19 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       oreViaggioAndata,
       oreViaggioRitorno,
       altriOperatori,
-    });
+      oreOperatori,
+      _updatedAt: new Date().toISOString(),
+    };
+    saveDraft(lavorazioneId, dati);
+    ultimoPayload.current = dati;
+    const t = setTimeout(() => {
+      if (!bozzaChiusa.current && !èVuota(dati)) {
+        salvaBozzaCloud(operatore, lavorazioneId, dati);
+      }
+    }, 2000);
+    return () => clearTimeout(t);
   }, [
+    bozzaPronta,
     lavorazioneId,
     form,
     firmaOperatore,
@@ -1864,6 +3374,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     oreViaggioAndata,
     oreViaggioRitorno,
     altriOperatori,
+    oreOperatori,
   ]);
 
   const set = useCallback((patch) => setForm((f) => ({ ...f, ...patch })), []);
@@ -1892,7 +3403,13 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     );
   };
 
-  const canSave = form.cliente.trim().length > 0 && form.data.trim().length > 0;
+  // Senza le due firme (operatore e cliente) il rapportino non si può
+  // inviare: entrambe sono obbligatorie, non solo i dati cliente/data.
+  const canSave =
+    form.cliente.trim().length > 0 &&
+    form.data.trim().length > 0 &&
+    !!firmaOperatore &&
+    !!firmaCliente;
 
   const handleSave = async () => {
     if (!canSave || saving) return;
@@ -1909,7 +3426,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     let doc, filename;
     try {
       const generato = generaRapportinoPDF({
-        lavorazioneId,
+        lavorazioneId: combo || comboImb ? "confezionamento" : tipo,
         lavorazioneLabel: lav.label,
         cliente: form.cliente,
         data: form.data,
@@ -1918,12 +3435,17 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
         controlliPreOperativi: full ? form.controlliPreOperativi : null,
         oraInizio,
         oraFine,
-        oreViaggioAndata,
-        oreViaggioRitorno,
-        altriOperatori,
+        oreViaggioAndata: isHub ? "" : oreViaggioAndata,
+        oreViaggioRitorno: isHub ? "" : oreViaggioRitorno,
+        altriOperatori: isHub ? "" : altriOperatori,
+        oreOperatori: isHub
+          ? oreOperatori.filter((o) => o.nome.trim() || o.ore)
+          : null,
         prodotti: full ? form.prodotti : null,
         vinoSemplice: form.vino,
         noteSemplice: form.note,
+        noteFinali: full ? form.noteFinali : "",
+        foto: full ? form.foto : [],
         firmaOperatore,
         nomeOperatore,
         firmaCliente,
@@ -1941,8 +3463,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     }
 
     setSaving(true);
+    setEmailWarning("");
+    const pdfBase64 = doc.output("datauristring").split(",")[1];
     try {
-      const pdfBase64 = doc.output("datauristring").split(",")[1];
       await conRiprovaDiRete(async () => {
         const { error } = await supabase.from("rapportini").insert({
           lavorazione: lav.label,
@@ -1951,6 +3474,9 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           operatore: nomeOperatore,
           dettagli: `Data intervento: ${form.data || "—"}`,
           pdf_base64: pdfBase64,
+          // Contatore bottiglie: Bottiglia e Magnum separati
+          bottiglie: full ? contaQuantita(form.prodotti).bottiglie : 0,
+          magnum: full ? contaQuantita(form.prodotti).magnum : 0,
         });
         if (error) throw error;
       });
@@ -1958,12 +3484,12 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
       console.error("Errore salvataggio archivio (dopo i tentativi):", e);
       setSaving(false);
       setSaveError(
-        "Nessuna connessione di rete: l'intervento NON è stato salvato in archivio e il PDF non è stato inviato. La bozza resta qui — riprova a premere \"Salva intervento\" quando hai connessione."
+        "Nessuna connessione di rete: l'intervento NON è stato salvato in archivio e il PDF non è stato scaricato. La bozza resta qui — riprova a premere \"Salva intervento\" quando hai connessione."
       );
       return;
     }
 
-    // Salvato in archivio: ora sì, scarica il PDF e apri l'email pronta.
+    // Salvato in archivio: ora sì, scarica il PDF sul dispositivo.
     onSave({
       lavorazioneId,
       lavorazioneLabel: lav.label,
@@ -1977,20 +3503,62 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
     });
 
     doc.save(filename);
-    setTimeout(() => {
-      apriEmailConDestinatari({
-        filename,
-        cliente: form.cliente,
-        lavorazioneLabel: lav.label,
-        emailAggiuntiva,
-      });
-    }, 600);
+
+    inviaNotificaArchiviazione({
+      cliente: form.cliente,
+      lavorazione: lav.label,
+      operatore: nomeOperatore,
+    });
+
+    // Invio automatico al cliente, con il PDF allegato, tramite la funzione
+    // Netlify collegata alla casella Gmail. Non blocca nulla: l'intervento è
+    // già in archivio e scaricato a prescindere dall'esito di questo invio.
+    const destinatari = isHub ? HUB_DESTINATARI : emailAggiuntiva.trim();
+    if (destinatari) {
+      try {
+        const risposta = await fetch("/.netlify/functions/invia-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: destinatari,
+            subject: `Rapportino ${lav.label} — ${form.cliente}`,
+            text: testoEmailCliente({
+              filename,
+              lavorazioneLabel: lav.label,
+              cliente: form.cliente,
+              data: form.data,
+              hub: isHub,
+            }),
+            filename,
+            pdfBase64,
+          }),
+        });
+        if (!risposta.ok) throw new Error(`risposta ${risposta.status}`);
+      } catch (e) {
+        console.error("Errore invio email al cliente:", e);
+        setEmailWarning(
+          "Il rapportino è salvato in archivio e scaricato, ma l'invio automatico della mail al cliente non è riuscito. Puoi inviarlo tu a mano dal PDF scaricato."
+        );
+      }
+    } else {
+      setEmailWarning(
+        "Il rapportino è salvato in archivio e scaricato, ma non è partita nessuna mail: non è impostata l'email del cliente."
+      );
+    }
 
     setSaving(false);
-    clearDraft(lavorazioneId);
+    chiudiBozza();
     setSaved(true);
     setTimeout(() => onBack(), 1400);
   };
+
+  if (!bozzaPronta) {
+    return (
+      <div style={styles.formWrap}>
+        <p style={styles.saveHint}>Caricamento bozza…</p>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.formWrap}>
@@ -2057,7 +3625,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </label>
         )}
 
-        {lavorazioneId === "sboccatura" && (
+        {(tipo === "sboccatura" || combo) && (
           <div>
             <div style={styles.sectionLabel}>Servizi accessori</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -2159,10 +3727,10 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
 
         {full ? (
           <>
-            {RIGHE_PRE_OPERATIVI[lavorazioneId] && (
+            {RIGHE_PRE_OPERATIVI[tipo] && (
               <TabellaControlliConforme
                 titolo="Controlli pre-operativi impianto/attrezzatura"
-                righe={RIGHE_PRE_OPERATIVI[lavorazioneId]}
+                righe={RIGHE_PRE_OPERATIVI[tipo]}
                 valori={form.controlliPreOperativi}
                 onChange={(v) => set({ controlliPreOperativi: v })}
               />
@@ -2212,8 +3780,119 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
+                {tipo === "travaso" && (
+                  <>
+                    <div style={styles.fieldGrid2}>
+                      <Field label="Quantità">
+                        <input
+                          style={styles.input}
+                          value={p.quantita}
+                          onChange={(e) => setProdotto(idx, { quantita: e.target.value })}
+                        />
+                      </Field>
+                      <Field label="Formato bottiglia">
+                        <input
+                          style={styles.input}
+                          value={p.bottFormato}
+                          onChange={(e) => setProdotto(idx, { bottFormato: e.target.value })}
+                          placeholder="es. 0,75 L"
+                        />
+                      </Field>
+                      <Field label="Capacità">
+                        <input
+                          style={styles.input}
+                          value={p.capacita}
+                          onChange={(e) => setProdotto(idx, { capacita: e.target.value })}
+                        />
+                      </Field>
+                      <Field label="Bottiglie perse">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          style={styles.input}
+                          value={p.bottigliePerse}
+                          onChange={(e) => setProdotto(idx, { bottigliePerse: e.target.value })}
+                        />
+                      </Field>
+                    </div>
+
+                    <TabellaControlliConforme
+                      titolo="Servizi accessori"
+                      righe={RIGHE_SERVIZI_TRAVASO}
+                      valori={p.serviziImbott || {}}
+                      onChange={(v) => setProdotto(idx, { serviziImbott: v })}
+                      opzioni={OPZIONI_SI_NO}
+                    />
+
+                    <div style={styles.sectionLabel}>Materiali</div>
+                    {(p.materialiTravaso || []).map((m, mi) => (
+                      <div key={mi} style={{ marginBottom: 10 }}>
+                        {mi < MATERIALI_TRAVASO_FISSI.length ? (
+                          <div style={{ fontSize: 13, marginBottom: 4 }}>
+                            {MATERIALI_TRAVASO_FISSI[mi]}
+                          </div>
+                        ) : (
+                          <input
+                            style={{ ...styles.input, marginBottom: 6 }}
+                            placeholder="altro materiale"
+                            value={m.nome}
+                            onChange={(e) => {
+                              const next = p.materialiTravaso.slice();
+                              next[mi] = { ...m, nome: e.target.value };
+                              setProdotto(idx, { materialiTravaso: next });
+                            }}
+                          />
+                        )}
+                        <div style={styles.fieldGrid2}>
+                          <input
+                            style={styles.input}
+                            placeholder="lotto numero"
+                            value={m.lotto}
+                            onChange={(e) => {
+                              const next = p.materialiTravaso.slice();
+                              next[mi] = { ...m, lotto: e.target.value };
+                              setProdotto(idx, { materialiTravaso: next });
+                            }}
+                          />
+                          <input
+                            style={styles.input}
+                            placeholder="quantità"
+                            value={m.quantita}
+                            onChange={(e) => {
+                              const next = p.materialiTravaso.slice();
+                              next[mi] = { ...m, quantita: e.target.value };
+                              setProdotto(idx, { materialiTravaso: next });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+
+                    <Field label="Lotto bottiglie">
+                      <input
+                        style={styles.input}
+                        value={p.lottoBottiglie}
+                        onChange={(e) => setProdotto(idx, { lottoBottiglie: e.target.value })}
+                      />
+                    </Field>
+                  </>
+                )}
+
+                {(tb === "imbottigliamento" || tipo === "tiraggio") && (
+                  <TabellaControlliConforme
+                    titolo="Servizi accessori"
+                    righe={tipo === "tiraggio" ? RIGHE_SERVIZI_TIRAGGIO : RIGHE_FASI_IMBOTTIGLIAMENTO}
+                    valori={p.serviziImbott || {}}
+                    onChange={(v) => setProdotto(idx, { serviziImbott: v })}
+                    opzioni={OPZIONI_SI_NO}
+                  />
+                )}
+
+                {tipo !== "travaso" && (
+                <>
                 <div style={styles.sectionLabel}>
-                  {lavorazioneId === "confezionamento" ? "Capsula" : "Tappo"}
+                  {tipo === "confezionamento" ? "Capsula" : "Tappo"}
                 </div>
                 <div style={styles.fieldGrid3}>
                   <Field label="Tipo">
@@ -2244,11 +3923,13 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     />
                   </Field>
                 </div>
+                </>
+                )}
 
-                {lavorazioneId !== "confezionamento" && (
+                {tipo !== "confezionamento" && tipo !== "travaso" && (
                   <>
                 <div style={styles.sectionLabel}>
-                  {lavorazioneId === "tiraggio" ? "Bidule" : "Gabbietta"}
+                  {tipo === "tiraggio" ? "Bidule" : tb === "imbottigliamento" ? "Vetri" : "Gabbietta"}
                 </div>
                 <div style={styles.fieldGrid3}>
                   <Field label="Tipo">
@@ -2282,11 +3963,13 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   </>
                 )}
 
-                {lavorazioneId !== "tiraggio" && lavorazioneId !== "confezionamento" && (
+                {tipo !== "tiraggio" && tipo !== "confezionamento" && tipo !== "travaso" && (
                   <>
-                <div style={styles.sectionLabel}>Liqueur</div>
+                {tb !== "imbottigliamento" && (
+                  <div style={styles.sectionLabel}>Liqueur</div>
+                )}
                 <div style={styles.fieldGrid2}>
-                  <Field label="Dosaggio">
+                  <Field label={tb === "imbottigliamento" ? "Dosaggio gomma arabica" : "Dosaggio"}>
                     <input
                       style={styles.input}
                       value={p.liqueurDosaggio}
@@ -2306,6 +3989,8 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   </Field>
                 </div>
 
+                {tb !== "imbottigliamento" && (
+                <>
                 <div style={styles.sectionLabel}>Sedimento</div>
                 <div style={styles.sedimentoRow}>
                   {[
@@ -2337,9 +4022,13 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     </label>
                   ))}
                 </div>
+                </>
+                )}
                   </>
                 )}
 
+                {tb !== "imbottigliamento" && tipo !== "travaso" && (
+                <>
                 <div style={styles.sectionLabel}>Bottiglie</div>
                 <div style={styles.fieldGrid2}>
                   <Field label="Formato">
@@ -2362,8 +4051,10 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                     />
                   </Field>
                 </div>
+                </>
+                )}
 
-                {lavorazioneId === "confezionamento" && (
+                {(tipo === "confezionamento" || combo || comboImb) && (
                   <>
                     <label style={styles.bioRow}>
                       <input
@@ -2420,22 +4111,163 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   />
                 </Field>
 
-                {RIGHE_CONTROLLI_PROCESSO[lavorazioneId] && (
+                {RIGHE_CONTROLLI_PROCESSO[tipo] && (
                   <TabellaControlliConforme
                     titolo="Controlli di processo"
-                    righe={RIGHE_CONTROLLI_PROCESSO[lavorazioneId]}
+                    righe={RIGHE_CONTROLLI_PROCESSO[tipo]}
                     valori={p.controlliProcesso}
                     onChange={(v) => setProdotto(idx, { controlliProcesso: v })}
                   />
                 )}
 
+                {tipo === "travaso" && (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={styles.sectionLabel}>Pressione</div>
+                    <Field label="Sovrapressione di partenza (bar)">
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.1"
+                        style={styles.input}
+                        value={p.sovrapressionePartenza}
+                        onChange={(e) =>
+                          setProdotto(idx, { sovrapressionePartenza: e.target.value })
+                        }
+                      />
+                    </Field>
+                    <div style={{ fontSize: 13, margin: "10px 0 4px" }}>
+                      Verifica pressione con aerometro{" "}
+                      <span style={{ color: COLORS.textMuted }}>(tolleranza ± 1 bar)</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      {[
+                        ["aerometroInizio", "Inizio lavoro"],
+                        ["aerometroMeta", "Metà lavoro"],
+                        ["aerometroFine", "Fine lavoro"],
+                      ].map(([k, et]) => (
+                        <label key={k} style={{ ...styles.bioRow, marginBottom: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={!!p[k]}
+                            onChange={(e) => setProdotto(idx, { [k]: e.target.checked })}
+                            style={styles.checkbox}
+                          />
+                          <span style={styles.bioText}>{et}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <Field label="Sovrapressione finale (bar) — riferimento ≥ 3,5 bar">
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.1"
+                        style={styles.input}
+                        value={p.sovrapressioneFinale}
+                        onChange={(e) =>
+                          setProdotto(idx, { sovrapressioneFinale: e.target.value })
+                        }
+                      />
+                    </Field>
+                  </div>
+                )}
+
                 <ControlTable
                   rows={p.controlli}
                   onChange={(controlli) => setProdotto(idx, { controlli })}
-                  tiraggio={lavorazioneId === "tiraggio"}
-                  confezionamento={lavorazioneId === "confezionamento"}
-                  semplice={lavorazioneId === "sboccatura"}
+                  tiraggio={tipo === "tiraggio"}
+                  vetri={tb === "imbottigliamento"}
+                  imbottigliamento={tb === "imbottigliamento"}
+                  confezionamento={tipo === "confezionamento"}
+                  semplice={tipo === "sboccatura" || combo || tipo === "travaso"}
+                  combinato={combo || comboImb}
                 />
+
+                {(tipo === "sboccatura" || combo) && (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={styles.sectionLabel}>Colmatura e rotture</div>
+                    <div style={styles.fieldGrid2}>
+                      <Field label="Bottiglie per colmatura">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          placeholder="0"
+                          style={styles.input}
+                          value={p.bottigliePerColmatura}
+                          onChange={(e) =>
+                            setProdotto(idx, { bottigliePerColmatura: e.target.value })
+                          }
+                        />
+                      </Field>
+                      <Field label="Bottiglie rotte">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          placeholder="0"
+                          style={styles.input}
+                          value={p.bottiglieRotte}
+                          onChange={(e) =>
+                            setProdotto(idx, { bottiglieRotte: e.target.value })
+                          }
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                )}
+
+                <div style={styles.vetriBlock}>
+                  <div style={styles.sectionLabel}>Registro rotture vetri (oPRP)</div>
+                  <div style={styles.sectionSub}>seguire quanto riportato nella PT 8.5.3</div>
+                  <div style={styles.vetriTable}>
+                    <div style={styles.vetriHead}>
+                      <span>Nr. bottiglie rotte</span>
+                      <span>Nr. bottiglie segregate</span>
+                    </div>
+                    {(p.registroVetri || []).map((r, k) => (
+                      <div key={k} style={styles.vetriRow}>
+                        {["rotte", "segregate"].map((campo) => (
+                          <input
+                            key={campo}
+                            type="number"
+                            inputMode="numeric"
+                            min="0"
+                            placeholder="0"
+                            style={styles.input}
+                            value={r[campo]}
+                            onChange={(e) =>
+                              setProdotto(idx, {
+                                registroVetri: p.registroVetri.map((x, j) =>
+                                  j === k ? { ...x, [campo]: e.target.value } : x
+                                ),
+                              })
+                            }
+                          />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                  <Field label="Note">
+                    <textarea
+                      style={{ ...styles.input, ...styles.textarea }}
+                      value={p.registroVetriNote || ""}
+                      onChange={(e) =>
+                        setProdotto(idx, { registroVetriNote: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <label style={styles.vetriOk}>
+                    <input
+                      type="checkbox"
+                      checked={!!p.okAssentiVetro}
+                      onChange={(e) =>
+                        setProdotto(idx, { okAssentiVetro: e.target.checked })
+                      }
+                      style={styles.checkbox}
+                    />
+                    <span>OK assenti frammenti di vetro</span>
+                  </label>
+                </div>
               </div>
             ))}
 
@@ -2499,6 +4331,61 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                 ))}
               </div>
             </div>
+
+            <div style={styles.noteBlock}>
+              <div style={styles.sectionLabel}>Note</div>
+              <textarea
+                style={{ ...styles.input, ...styles.textarea }}
+                value={form.noteFinali || ""}
+                onChange={(e) => set({ noteFinali: e.target.value })}
+                placeholder="note sull'intervento (facoltativo)"
+              />
+              <div style={styles.fotoRow}>
+                {(form.foto || []).map((f, i) => (
+                  <div key={i} style={styles.fotoThumb}>
+                    <img src={f.dataUrl} alt={`Foto ${i + 1}`} style={styles.fotoImg} />
+                    <button
+                      type="button"
+                      aria-label="Rimuovi foto"
+                      onClick={() =>
+                        set({ foto: form.foto.filter((_, k) => k !== i) })
+                      }
+                      style={styles.fotoRemove}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {(form.foto || []).length < 3 && (
+                  <label style={styles.fotoAdd}>
+                    <span style={{ fontSize: 22, lineHeight: 1 }}>📷</span>
+                    <span style={{ fontSize: 11.5 }}>Aggiungi foto</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={async (e) => {
+                        const files = Array.from(e.target.files || []);
+                        e.target.value = "";
+                        const posti = 3 - (form.foto || []).length;
+                        const nuove = [];
+                        for (const file of files.slice(0, posti)) {
+                          try {
+                            nuove.push(await riduciFoto(file));
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }
+                        if (nuove.length)
+                          set({ foto: [...(form.foto || []), ...nuove] });
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+              <div style={styles.fotoHint}>Fino a 3 foto · compaiono nel PDF</div>
+            </div>
           </>
         ) : (
           <Field label="Note">
@@ -2530,6 +4417,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </Field>
         </div>
 
+        {!isHub && (
         <div style={styles.fieldGrid2}>
           <Field label="Ore viaggio andata">
             <input
@@ -2556,7 +4444,87 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
             />
           </Field>
         </div>
+        )}
 
+        {isHub && (
+          <div style={styles.noteBlock}>
+            <div style={styles.sectionLabel}>Ore operatori</div>
+            <div style={styles.oreTable}>
+              <div style={styles.oreHead}>
+                <span>Operatore</span>
+                <span style={{ textAlign: "right" }}>Totale ore</span>
+                <span />
+              </div>
+              {oreOperatori.map((o, i) => (
+                <div key={i} style={styles.oreRow}>
+                  <input
+                    type="text"
+                    style={styles.input}
+                    placeholder="nome e cognome"
+                    value={o.nome}
+                    readOnly={i === 0}
+                    onChange={(e) =>
+                      setOreOperatori((l) =>
+                        l.map((x, k) => (k === i ? { ...x, nome: e.target.value } : x))
+                      )
+                    }
+                  />
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.5"
+                    min="0"
+                    placeholder="0"
+                    style={{ ...styles.input, textAlign: "right" }}
+                    value={o.ore}
+                    onChange={(e) =>
+                      setOreOperatori((l) =>
+                        l.map((x, k) => (k === i ? { ...x, ore: e.target.value } : x))
+                      )
+                    }
+                  />
+                  {i > 0 ? (
+                    <button
+                      type="button"
+                      aria-label="Rimuovi operatore"
+                      style={styles.oreRemove}
+                      onClick={() =>
+                        setOreOperatori((l) => l.filter((_, k) => k !== i))
+                      }
+                    >
+                      ×
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              disabled={oreOperatori.length >= 4}
+              onClick={() =>
+                setOreOperatori((l) => [...l, { nome: "", ore: "" }])
+              }
+              style={{
+                ...styles.addProdottoBtn,
+                opacity: oreOperatori.length >= 4 ? 0.4 : 1,
+              }}
+            >
+              + Aggiungi operatore ({oreOperatori.length}/4)
+            </button>
+            <div style={styles.oreTotale}>
+              <span>Totale ore squadra</span>
+              <b>
+                {String(
+                  oreOperatori.reduce((s, o) => s + (parseFloat(o.ore) || 0), 0)
+                ).replace(".", ",")}
+              </b>
+            </div>
+          </div>
+        )}
+
+        {!isHub && (
         <Field label="Secondo operatore / altro operatore">
           <input
             type="text"
@@ -2566,6 +4534,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
             onChange={(e) => setAltriOperatori(e.target.value)}
           />
         </Field>
+        )}
 
         <div style={styles.sigGrid}>
           <SignaturePad
@@ -2596,7 +4565,7 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
                   "Tornare alla home e cancellare questo rapportino compilato finora?"
                 )
               ) {
-                clearDraft(lavorazioneId);
+                chiudiBozza();
                 onBack();
               }
             }}
@@ -2606,25 +4575,47 @@ function InterventoForm({ lavorazioneId, onBack, onSave, operatore }) {
           </button>
         </div>
 
-        <Field label="Email cliente (per l'invio del rapportino)">
-          <input
-            type="email"
-            style={styles.input}
-            value={emailAggiuntiva}
-            onChange={(e) => setEmailAggiuntiva(e.target.value)}
-            placeholder="es. destinatario@azienda.it"
-          />
-        </Field>
+        {isHub ? (
+          <Field label="Il rapportino verrà inviato a">
+            <div style={{ fontSize: 13, color: COLORS.textMuted, lineHeight: 1.6 }}>
+              {HUB_DESTINATARI.split(", ").map((m) => (
+                <div key={m}>{m}</div>
+              ))}
+            </div>
+          </Field>
+        ) : (
+          <Field label="Email cliente (per l'invio del rapportino)">
+            <input
+              type="email"
+              style={styles.input}
+              value={emailAggiuntiva}
+              onChange={(e) => setEmailAggiuntiva(e.target.value)}
+              placeholder="es. destinatario@azienda.it"
+            />
+          </Field>
+        )}
 
         <div style={styles.saveRow}>
           {!canSave && (
             <span style={styles.saveHint}>
-              cliente e data sono necessari per salvare
+              mancano:{" "}
+              {[
+                (!form.cliente.trim() || !form.data.trim()) && "cliente e data",
+                !firmaOperatore && "firma operatore",
+                !firmaCliente && "firma cliente",
+              ]
+                .filter(Boolean)
+                .join(", ")}
             </span>
           )}
           {saveError && (
             <span style={{ ...styles.saveHint, color: "#D98F7A" }}>
               {saveError}
+            </span>
+          )}
+          {emailWarning && (
+            <span style={{ ...styles.saveHint, color: COLORS.gold }}>
+              {emailWarning}
             </span>
           )}
           <button
@@ -2668,6 +4659,39 @@ export default function App() {
   const [storico, setStorico] = useState([]);
   const [operatore, setOperatore] = useState(loadOperatoreSessione());
 
+  // Per aggiornare l'app l'operatore deve digitare il proprio PIN.
+  const [chiediPinAggiorna, setChiediPinAggiorna] = useState(false);
+  const [pinAggiorna, setPinAggiorna] = useState("");
+  const [erroreAggiorna, setErroreAggiorna] = useState(false);
+
+  // Aggiornamento app: quando su Netlify viene caricata una nuova versione,
+  // il service worker la scarica in background e qui compare il pulsante
+  // "Aggiornamento disponibile". Le bozze sono salvate sul dispositivo, quindi
+  // aggiornare non fa perdere quello che si sta compilando.
+  // Controlla anche ogni ora, perché una PWA lasciata aperta non cercherebbe
+  // da sola nuove versioni.
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegisteredSW(_url, registration) {
+      if (registration) {
+        setInterval(() => registration.update(), 60 * 60 * 1000);
+      }
+    },
+  });
+
+  const confermaAggiornamento = async () => {
+    // "cambia" = PIN ancora iniziale/provvisorio: per aggiornare l'app basta
+    // che sia quello giusto, il cambio avviene al prossimo accesso.
+    const esito = await verificaPin(operatore, pinAggiorna);
+    if (esito === "ok" || esito === "cambia") {
+      updateServiceWorker(true);
+    } else {
+      setErroreAggiorna(true);
+    }
+  };
+
   const cambiaOperatore = () => {
     clearOperatoreSessione();
     setOperatore("");
@@ -2696,11 +4720,17 @@ export default function App() {
           onCambiaOperatore={cambiaOperatore}
           onArchivio={() => setView("archivio")}
           onCaricaManuale={() => setView("carica-manuale")}
+          onContatore={() => setView("contatore")}
+          onGestionePin={() => setView("pin")}
         />
+      ) : view === "pin" && AMMINISTRATORI.includes(operatore) ? (
+        <GestionePin onBack={() => setView("home")} />
       ) : view === "archivio" ? (
         <ArchivioRapportini onBack={() => setView("home")} />
       ) : view === "carica-manuale" ? (
         <CaricaManuale onBack={() => setView("home")} />
+      ) : view === "contatore" && CONTATORE_VISIBILE_A.includes(operatore) ? (
+        <ContatoreBottiglie onBack={() => setView("home")} />
       ) : (
         <InterventoForm
           lavorazioneId={view}
@@ -2708,6 +4738,51 @@ export default function App() {
           onSave={(entry) => setStorico((s) => [entry, ...s])}
           operatore={operatore}
         />
+      )}
+      {needRefresh && (
+        <div style={styles.updateBanner}>
+          {!chiediPinAggiorna ? (
+            <>
+              <span>Aggiornamento disponibile</span>
+              <button
+                onClick={() => {
+                  setPinAggiorna("");
+                  setErroreAggiorna(false);
+                  setChiediPinAggiorna(true);
+                }}
+                style={styles.updateBtn}
+              >
+                Aggiorna ora
+              </button>
+            </>
+          ) : (
+            <>
+              <input
+                type="password"
+                inputMode="numeric"
+                autoFocus
+                placeholder="Il tuo PIN"
+                value={pinAggiorna}
+                onChange={(e) => {
+                  setPinAggiorna(e.target.value);
+                  setErroreAggiorna(false);
+                }}
+                style={{
+                  ...styles.input,
+                  flex: 1,
+                  minWidth: 0,
+                  borderColor: erroreAggiorna ? "#D98F7A" : undefined,
+                }}
+              />
+              <button
+                onClick={confermaAggiornamento}
+                style={styles.updateBtn}
+              >
+                Conferma
+              </button>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
@@ -2740,6 +4815,36 @@ const styles = {
     color: COLORS.text,
     fontFamily: FONT_BODY,
     padding: "20px 16px 48px",
+  },
+
+  // ---- Banner aggiornamento app ----
+  updateBanner: {
+    position: "fixed",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    zIndex: 1000,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    padding: "11px 14px",
+    background: COLORS.surfaceRaised,
+    border: `1px solid ${COLORS.gold}`,
+    borderRadius: 10,
+    color: COLORS.text,
+    fontSize: 14,
+    boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
+  },
+  updateBtn: {
+    background: COLORS.gold,
+    color: "#1C2321",
+    border: "none",
+    borderRadius: 7,
+    padding: "8px 14px",
+    fontSize: 13.5,
+    fontWeight: 600,
+    cursor: "pointer",
   },
 
   // ---- Login ----
@@ -2926,6 +5031,22 @@ const styles = {
     padding: 0,
     marginBottom: 14,
   },
+  // Pulsante "Torna alla home" ben visibile e facile da premere (Archivio)
+  backBtnGrande: {
+    display: "block",
+    width: "100%",
+    minHeight: 48,
+    background: COLORS.surfaceRaised,
+    border: `1.5px solid ${COLORS.gold}`,
+    borderRadius: 10,
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: "12px 16px",
+    marginBottom: 16,
+    textAlign: "center",
+  },
   formTitleRow: { display: "flex", alignItems: "baseline", gap: 10 },
   formCifra: { fontFamily: FONT_MONO, fontSize: 13, color: COLORS.gold },
   formTitle: {
@@ -3072,75 +5193,174 @@ const styles = {
     borderRadius: 6,
     border: `1px solid ${COLORS.border}`,
   },
+  // Scroll orizzontale contenuto per la tabella "controlli di linea" di
+  // Sboccatura: intestazione e righe sono DENTRO lo stesso contenitore, così
+  // scorrono sempre insieme e non possono più sfasarsi su schermi stretti.
+  controlTableScrollX: {
+    overflowX: "auto",
+    WebkitOverflowScrolling: "touch",
+  },
   controlTableHead: {
-    display: "grid",
-    columnGap: 6,
-    alignItems: "end",
-    padding: "7px 8px",
-    fontSize: 10,
+    display: "flex",
+    gap: 8,
+    padding: "7px 10px",
+    fontSize: 10.5,
     textTransform: "uppercase",
-    letterSpacing: 0.3,
-    lineHeight: 1.25,
+    letterSpacing: 0.5,
     color: COLORS.textMuted,
     borderBottom: `1px solid ${COLORS.border}`,
     position: "sticky",
     top: 0,
-    zIndex: 1,
     background: COLORS.surface,
   },
-  headCell: {
-    minWidth: 0,
-    overflowWrap: "break-word",
-    hyphens: "auto",
-  },
-  headCellCenter: {
-    minWidth: 0,
-    overflowWrap: "break-word",
-    hyphens: "auto",
-    textAlign: "center",
-  },
   controlRow: {
-    display: "grid",
-    columnGap: 6,
-    padding: "5px 8px",
-    alignItems: "center",
-    borderBottom: `1px solid rgba(237,232,221,0.06)`,
-  },
-  // Righe della tabella Conforme/Non conforme (layout flex, invariato)
-  conformeRow: {
     display: "flex",
     gap: 8,
     padding: "5px 10px",
     alignItems: "center",
     borderBottom: `1px solid rgba(237,232,221,0.06)`,
   },
+  // Griglia a colonne fisse per la tabella "controlli di linea" di
+  // Sboccatura: stessa definizione su intestazione e righe, garantisce che
+  // ogni valore resti sotto la colonna giusta.
+  gridSemplice: {
+    display: "grid",
+    gridTemplateColumns: "64px 76px 1fr 1fr 70px 70px 1fr",
+    alignItems: "center",
+  },
   controlTime: {
-    minWidth: 0,
+    width: 64,
     fontFamily: FONT_MONO,
     fontSize: 12,
     color: COLORS.textMuted,
   },
   controlInput: {
-    width: "100%",
-    minWidth: 0,
-    boxSizing: "border-box",
+    flex: 1,
     background: "transparent",
     border: "none",
     borderBottom: `1px solid ${COLORS.border}`,
-    borderRadius: 0,
     color: COLORS.text,
     fontSize: 13,
     padding: "3px 2px",
     outline: "none",
   },
   checkCell: {
-    minWidth: 0,
+    width: 76,
     display: "flex",
     justifyContent: "center",
     cursor: "pointer",
   },
 
   // ---- Signature ----
+  noteBlock: { marginTop: 18 },
+  vetriBlock: {
+    marginTop: 16,
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 8,
+    padding: "12px 14px",
+  },
+  vetriTable: { marginTop: 10, display: "flex", flexDirection: "column", gap: 6 },
+  vetriHead: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 8,
+    fontSize: 10.5,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    color: COLORS.textMuted,
+  },
+  vetriRow: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 },
+  vetriOk: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 10,
+    fontSize: 14,
+    cursor: "pointer",
+  },
+  oreTable: {
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  oreHead: {
+    display: "grid",
+    gridTemplateColumns: "1fr 110px 34px",
+    gap: 8,
+    padding: "8px 10px",
+    fontSize: 10.5,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    color: COLORS.textMuted,
+    background: COLORS.surface,
+    borderBottom: `1px solid ${COLORS.border}`,
+  },
+  oreRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 110px 34px",
+    gap: 8,
+    alignItems: "center",
+    padding: "8px 10px",
+    borderBottom: `1px solid rgba(237,232,221,0.06)`,
+  },
+  oreRemove: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    border: `1px solid ${COLORS.border}`,
+    background: "none",
+    color: COLORS.textMuted,
+    fontSize: 17,
+    cursor: "pointer",
+    padding: 0,
+  },
+  oreTotale: {
+    display: "flex",
+    justifyContent: "space-between",
+    marginTop: 10,
+    fontSize: 13,
+    color: COLORS.textMuted,
+  },
+  fotoRow: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 },
+  fotoThumb: {
+    position: "relative",
+    width: 92,
+    height: 92,
+    borderRadius: 8,
+    overflow: "hidden",
+    border: `1px solid ${COLORS.border}`,
+  },
+  fotoImg: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
+  fotoRemove: {
+    position: "absolute",
+    top: 3,
+    right: 3,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    border: "none",
+    background: "rgba(0,0,0,0.65)",
+    color: "#fff",
+    fontSize: 18,
+    lineHeight: "24px",
+    padding: 0,
+    cursor: "pointer",
+  },
+  fotoAdd: {
+    width: 92,
+    height: 92,
+    borderRadius: 8,
+    border: `1.5px dashed ${COLORS.gold}`,
+    color: COLORS.textMuted,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    cursor: "pointer",
+    textAlign: "center",
+  },
+  fotoHint: { fontSize: 11.5, color: COLORS.textMuted, marginTop: 6 },
   qtaBlock: {
     display: "flex",
     flexDirection: "column",
@@ -3195,15 +5415,17 @@ const styles = {
     outline: "none",
   },
 
+  // Le due firme una sopra l'altra, a tutta larghezza
   sigGrid: {
     display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 16,
+    gridTemplateColumns: "1fr",
+    gap: 22,
     marginTop: 6,
   },
   sigCanvas: {
     width: "100%",
-    height: 100,
+    aspectRatio: "700 / 250",
+    minHeight: 150,
     background: "rgba(0,0,0,0.18)",
     border: `1px dashed ${COLORS.borderStrong}`,
     borderRadius: 8,
