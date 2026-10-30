@@ -1,0 +1,73 @@
+// Funzione Netlify: invia al cliente la mail con il PDF del rapportino
+// allegato, tramite la casella Gmail di Oeno Soluzioni.
+//
+// Riceve dall'app { to, subject, text, filename, pdfBase64 } via POST e usa
+// nodemailer con l'SMTP di Gmail. Le credenziali NON sono mai nel codice: si
+// leggono dalle variabili d'ambiente configurate su Netlify.
+//   GMAIL_USER            la casella Gmail che invia
+//   GMAIL_APP_PASSWORD    "password per le app" di Google (non la password normale)
+
+const nodemailer = require("nodemailer");
+
+exports.handler = async (event) => {
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, body: "Method not allowed" };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(event.body || "{}");
+  } catch (e) {
+    return { statusCode: 400, body: JSON.stringify({ error: "JSON non valido" }) };
+  }
+
+  const { to, subject, text, filename, pdfBase64 } = payload;
+
+  if (!to || !filename || !pdfBase64) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: "Mancano destinatario, nome file o PDF." }),
+    };
+  }
+
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    console.error("GMAIL_USER / GMAIL_APP_PASSWORD non configurate su Netlify.");
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Casella mail non configurata sul server." }),
+    };
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
+      },
+    });
+
+    // I destinatari possono essere una lista separata da virgole
+    await transporter.sendMail({
+      from: `"Oeno Soluzioni — Rapportini" <${process.env.GMAIL_USER}>`,
+      to,
+      subject: subject || "Rapportino",
+      text: text || "In allegato il rapportino.",
+      attachments: [
+        {
+          filename,
+          content: pdfBase64,
+          encoding: "base64",
+        },
+      ],
+    });
+
+    return { statusCode: 200, body: JSON.stringify({ ok: true }) };
+  } catch (e) {
+    console.error("Errore invio email:", e);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: e.message || "Errore invio email" }),
+    };
+  }
+};
