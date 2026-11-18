@@ -2632,7 +2632,7 @@ function ContatoreBottiglie({ onBack }) {
   );
 }
 
-function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onCaricaManuale, onContatore, onGestionePin }) {
+function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onCaricaManuale, onContatore, onGestionePin, sospeso, onCambiaSospensione }) {
   const isAdmin = AMMINISTRATORI.includes(operatore);
   const [conteggioArchivio, setConteggioArchivio] = useState(null);
 
@@ -2706,6 +2706,19 @@ function Home({ onSelect, storico, operatore, onCambiaOperatore, onArchivio, onC
           )}
           <button onClick={onGestionePin} style={styles.archivioBtn}>
             🔑 Gestione PIN
+          </button>
+          <button
+            onClick={onCambiaSospensione}
+            style={{
+              ...styles.archivioBtn,
+              ...(sospeso
+                ? { background: "rgba(217,143,122,0.14)", borderColor: "#D98F7A", color: "#D98F7A" }
+                : {}),
+            }}
+          >
+            {sospeso
+              ? "⏸ Accesso operatori SOSPESO — tocca per riattivare"
+              : "⏸ Sospendi accesso operatori"}
           </button>
         </div>
       )}
@@ -4698,6 +4711,61 @@ export default function App() {
     setView("home");
   };
 
+  // Sospensione accesso operatori: gli amministratori la accendono/spengono
+  // dalla Home. Valore salvato su Supabase (tabella impostazioni). Se la rete
+  // non risponde l'app NON blocca nessuno (si mantiene l'ultimo valore noto).
+  const [sospeso, setSospeso] = useState(false);
+  const [modoAdmin, setModoAdmin] = useState(false);
+  const [erroreAdmin, setErroreAdmin] = useState(false);
+
+  const leggiSospensione = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("impostazioni")
+        .select("valore")
+        .eq("chiave", "accesso_operatori")
+        .maybeSingle();
+      if (error) return;
+      setSospeso(!!data && data.valore === "sospeso");
+    } catch (e) {
+      /* offline: resta l'ultimo valore noto */
+    }
+  };
+
+  useEffect(() => {
+    leggiSospensione();
+    const timer = setInterval(leggiSospensione, 60 * 1000);
+    const alRitorno = () => {
+      if (document.visibilityState === "visible") leggiSospensione();
+    };
+    document.addEventListener("visibilitychange", alRitorno);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", alRitorno);
+    };
+  }, []);
+
+  const cambiaSospensione = async () => {
+    const nuovo = !sospeso;
+    const ok = window.confirm(
+      nuovo
+        ? "Sospendere l'accesso agli operatori? Solo gli amministratori potranno usare l'app."
+        : "Riattivare l'accesso a tutti gli operatori?"
+    );
+    if (!ok) return;
+    const { error } = await supabase
+      .from("impostazioni")
+      .upsert({ chiave: "accesso_operatori", valore: nuovo ? "sospeso" : "attivo" });
+    if (error) {
+      window.alert("Non sono riuscito a salvare: controlla la connessione e riprova.");
+      return;
+    }
+    setSospeso(nuovo);
+  };
+
+  const bloccaOperatore =
+    sospeso && !modoAdmin && !AMMINISTRATORI.includes(operatore);
+
   return (
     <div style={styles.app}>
       <style>{`
@@ -4706,12 +4774,25 @@ export default function App() {
         input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.8); }
       `}</style>
       {!operatore ? (
-        <Login
-          onLogin={(nome) => {
-            saveOperatoreSessione(nome);
-            setOperatore(nome);
-          }}
-        />
+        <>
+          {erroreAdmin && (
+            <div style={{ color: "#D98F7A", textAlign: "center", padding: "14px 16px 0", fontSize: 13.5 }}>
+              Accesso riservato agli amministratori.
+            </div>
+          )}
+          <Login
+            onLogin={(nome) => {
+              if (sospeso && !AMMINISTRATORI.includes(nome)) {
+                setModoAdmin(false);
+                setErroreAdmin(true);
+                return;
+              }
+              setErroreAdmin(false);
+              saveOperatoreSessione(nome);
+              setOperatore(nome);
+            }}
+          />
+        </>
       ) : view === "home" ? (
         <Home
           storico={storico}
@@ -4722,6 +4803,8 @@ export default function App() {
           onCaricaManuale={() => setView("carica-manuale")}
           onContatore={() => setView("contatore")}
           onGestionePin={() => setView("pin")}
+          sospeso={sospeso}
+          onCambiaSospensione={cambiaSospensione}
         />
       ) : view === "pin" && AMMINISTRATORI.includes(operatore) ? (
         <GestionePin onBack={() => setView("home")} />
@@ -4738,6 +4821,40 @@ export default function App() {
           onSave={(entry) => setStorico((s) => [entry, ...s])}
           operatore={operatore}
         />
+      )}
+      {bloccaOperatore && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: COLORS.bg,
+            color: COLORS.text,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            textAlign: "center",
+            padding: 28,
+            gap: 18,
+            fontFamily: FONT_BODY,
+          }}
+        >
+          <img src={oenoLogo} alt="Oeno Soluzioni" style={styles.loginLogo} />
+          <h1 style={{ ...styles.brandTitle, fontSize: 24, lineHeight: 1.3 }}>
+            Progetto in aggiornamento, stiamo lavorando per voi
+          </h1>
+          <button
+            style={{ ...styles.linkBtn, marginTop: 24, fontSize: 13 }}
+            onClick={() => {
+              if (operatore && !AMMINISTRATORI.includes(operatore)) cambiaOperatore();
+              setErroreAdmin(false);
+              setModoAdmin(true);
+            }}
+          >
+            Accesso amministratori
+          </button>
+        </div>
       )}
       {needRefresh && (
         <div style={styles.updateBanner}>
