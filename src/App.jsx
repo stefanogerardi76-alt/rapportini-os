@@ -4676,6 +4676,7 @@ export default function App() {
   const [chiediPinAggiorna, setChiediPinAggiorna] = useState(false);
   const [pinAggiorna, setPinAggiorna] = useState("");
   const [erroreAggiorna, setErroreAggiorna] = useState(false);
+  const [rimandaAggiorna, setRimandaAggiorna] = useState(false);
 
   // Aggiornamento app: quando su Netlify viene caricata una nuova versione,
   // il service worker la scarica in background e qui compare il pulsante
@@ -4856,24 +4857,45 @@ export default function App() {
           </button>
         </div>
       )}
-      {needRefresh && (
-        <div style={styles.updateBanner}>
+      {needRefresh && !rimandaAggiorna && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9998,
+            background: COLORS.bg,
+            color: COLORS.text,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            textAlign: "center",
+            padding: 28,
+            gap: 20,
+            fontFamily: FONT_BODY,
+          }}
+        >
+          <img src={oenoLogo} alt="Oeno Soluzioni" style={styles.loginLogo} />
+          <h1 style={{ ...styles.brandTitle, fontSize: 26, lineHeight: 1.3 }}>
+            Nuova versione disponibile
+          </h1>
+          <p style={{ fontSize: 16, lineHeight: 1.5, maxWidth: 340, margin: 0, color: COLORS.muted }}>
+            Per continuare devi aggiornare l'app. Le bozze che stai compilando
+            non vanno perse.
+          </p>
           {!chiediPinAggiorna ? (
-            <>
-              <span>Aggiornamento disponibile</span>
-              <button
-                onClick={() => {
-                  setPinAggiorna("");
-                  setErroreAggiorna(false);
-                  setChiediPinAggiorna(true);
-                }}
-                style={styles.updateBtn}
-              >
-                Aggiorna ora
-              </button>
-            </>
+            <button
+              onClick={() => {
+                setPinAggiorna("");
+                setErroreAggiorna(false);
+                setChiediPinAggiorna(true);
+              }}
+              style={{ ...styles.saveBtn, width: "100%", maxWidth: 340, fontSize: 18, padding: "16px 20px" }}
+            >
+              Aggiorna ora
+            </button>
           ) : (
-            <>
+            <div style={{ width: "100%", maxWidth: 340, display: "flex", flexDirection: "column", gap: 12 }}>
               <input
                 type="password"
                 inputMode="numeric"
@@ -4886,19 +4908,28 @@ export default function App() {
                 }}
                 style={{
                   ...styles.input,
-                  flex: 1,
-                  minWidth: 0,
+                  fontSize: 18,
+                  textAlign: "center",
                   borderColor: erroreAggiorna ? "#D98F7A" : undefined,
                 }}
               />
+              {erroreAggiorna && (
+                <div style={{ color: "#D98F7A", fontSize: 14 }}>PIN non corretto</div>
+              )}
               <button
                 onClick={confermaAggiornamento}
-                style={styles.updateBtn}
+                style={{ ...styles.saveBtn, fontSize: 18, padding: "16px 20px" }}
               >
-                Conferma
+                Conferma e aggiorna
               </button>
-            </>
+            </div>
           )}
+          <button
+            style={{ ...styles.linkBtn, marginTop: 12, fontSize: 13 }}
+            onClick={() => setRimandaAggiorna(true)}
+          >
+            Più tardi
+          </button>
         </div>
       )}
     </div>
